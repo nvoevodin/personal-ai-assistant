@@ -23,4 +23,15 @@ Analyze this image or document with high precision.
    - Payment Method / Masked Card
    - Key Line Items
 4. Provide a structured, beautiful Telegram Markdown summary with actionable takeaways or warnings.
+5. AT THE VERY END of your response, output a parseable JSON block wrapped in ```json ... ``` with:
+   {
+     "merchant": "string",
+     "total_amount": float,
+     "currency": "USD",
+     "tax_amount": float,
+     "date": "YYYY-MM-DD",
+     "category": "Groceries|Dining|Travel|Shopping|Utilities|General",
+     "items": [{"name": "string", "price": float}]
+   }
+If the image is not a financial document, omit the JSON block.
 """

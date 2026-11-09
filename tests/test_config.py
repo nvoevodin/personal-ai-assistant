@@ -48,7 +48,7 @@ def test_settings_missing_token_raises_validation_error(monkeypatch: pytest.Monk
     monkeypatch.setenv("ALLOWED_TELEGRAM_USER_IDS", "123")
 
     with pytest.raises(ValidationError) as exc:
-        Settings()
+        Settings(_env_file=None)
     assert "telegram_bot_token" in str(exc.value)
 
 

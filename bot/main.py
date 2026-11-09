@@ -65,7 +65,7 @@ def build_bot_application(
     # 1. Initialize life-stream connectors
     if registry is None:
         registry = ConnectorRegistry()
-        registry.register(MonarchConnector())
+        registry.register(MonarchConnector(token=resolved_settings.monarch_token_value))
         registry.register(GmailConnector())
 
     # 2. Initialize Gemini Client & Agent Runner

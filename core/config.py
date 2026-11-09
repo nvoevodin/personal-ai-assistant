@@ -42,6 +42,10 @@ class Settings(BaseSettings):
         le=300,
         description="Maximum permitted LLM invocations per minute per user",
     )
+    monarch_token: SecretStr | None = Field(
+        default=None,
+        description="Optional Monarch Money session token for live account syncing",
+    )
 
     @field_validator("allowed_telegram_user_ids", mode="before")
     @classmethod
@@ -76,6 +80,11 @@ class Settings(BaseSettings):
     def gemini_api_key_value(self) -> str:
         """Helper to expose the raw Gemini API Key safely."""
         return self.gemini_api_key.get_secret_value()
+
+    @property
+    def monarch_token_value(self) -> str | None:
+        """Helper to expose the raw Monarch Token safely."""
+        return self.monarch_token.get_secret_value() if self.monarch_token else None
 
     def is_user_allowed(self, user_id: int | None) -> bool:
         """Determine if a Telegram user ID is whitelisted."""
