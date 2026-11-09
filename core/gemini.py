@@ -27,6 +27,7 @@ class GeminiClient:
 
         # Support dependency injection for tests
         self.client: genai.Client = client or genai.Client(api_key=resolved_api_key)
+        self._exhausted_models: set[str] = set()
 
     async def _generate_content_resilient(
         self,
@@ -34,11 +35,17 @@ class GeminiClient:
         config: types.GenerateContentConfig,
         model: str | None = None,
     ) -> tuple[types.GenerateContentResponse, str]:
-        """Call Gemini API with automatic fallback if the requested model returns 503 high-demand."""
-        candidate_models = [model or self.model]
-        for fallback in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
-            if fallback not in candidate_models:
-                candidate_models.append(fallback)
+        """Call Gemini API with automatic fallback if the requested model returns 503/429 limits."""
+        all_candidates = [model or self.model, "gemini-3.5-flash", "gemini-3.1-flash-lite"]
+        # Deduplicate while preserving order
+        candidate_models: list[str] = []
+        for m in all_candidates:
+            if m not in candidate_models and m not in self._exhausted_models:
+                candidate_models.append(m)
+
+        if not candidate_models:
+            # If all were flagged, try fallback models anyway
+            candidate_models = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
 
         last_error = None
         for cand in candidate_models:
@@ -48,22 +55,22 @@ class GeminiClient:
                     contents=contents,
                     config=config,
                 )
-                if cand != candidate_models[0]:
+                if cand != (model or self.model):
                     logger.warning(
                         "Primary model %s was unavailable; successfully used fallback %s",
-                        candidate_models[0],
+                        model or self.model,
                         cand,
                     )
                 return response, cand
             except Exception as exc:
                 last_error = exc
                 err_msg = str(exc)
-                if any(k in err_msg for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "quota", "Quota"]):
-                    logger.warning(
-                        "Model %s hit limit/unavailability (%s); switching to fallback...",
-                        cand,
-                        exc,
-                    )
+                if any(k in err_msg for k in ["429", "RESOURCE_EXHAUSTED", "quota", "Quota"]):
+                    self._exhausted_models.add(cand)
+                    logger.warning("Model %s exhausted its daily quota; marked as exhausted.", cand)
+                    continue
+                if any(k in err_msg for k in ["503", "UNAVAILABLE"]):
+                    logger.warning("Model %s returned 503 UNAVAILABLE, switching to fallback...", cand)
                     continue
                 raise exc
 
