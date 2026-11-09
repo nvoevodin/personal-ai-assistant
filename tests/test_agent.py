@@ -22,10 +22,13 @@ async def test_context_builder_formats_events(mock_registry: ConnectorRegistry) 
 
 @pytest.mark.asyncio
 async def test_agent_runner_handle_user_query(
-    mock_gemini_client: GeminiClient, mock_registry: ConnectorRegistry
+    mock_gemini_client: GeminiClient, mock_registry: ConnectorRegistry, tmp_path: pytest.TempPathFactory
 ) -> None:
     """Verify AgentRunner processes user query, invokes Gemini with tools, and returns response."""
-    runner = AgentRunner(gemini_client=mock_gemini_client, registry=mock_registry)
+    from storage.db import DatabaseManager
+
+    test_db = DatabaseManager(db_path=str(tmp_path / "query_test.db"))
+    runner = AgentRunner(gemini_client=mock_gemini_client, registry=mock_registry, db=test_db)
     response = await runner.handle_user_query(user_id=111222333, query="How much did I spend at Whole Foods?")
 
     assert response == "Processed response with financial tools."
@@ -55,10 +58,13 @@ async def test_agent_runner_multi_turn_history(
 
 @pytest.mark.asyncio
 async def test_agent_runner_handle_photo(
-    mock_gemini_client: GeminiClient, mock_registry: ConnectorRegistry
+    mock_gemini_client: GeminiClient, mock_registry: ConnectorRegistry, tmp_path: pytest.TempPathFactory
 ) -> None:
     """Verify AgentRunner processes photo attachment via Gemini multimodal OCR."""
-    runner = AgentRunner(gemini_client=mock_gemini_client, registry=mock_registry)
+    from storage.db import DatabaseManager
+
+    test_db = DatabaseManager(db_path=str(tmp_path / "photo_test.db"))
+    runner = AgentRunner(gemini_client=mock_gemini_client, registry=mock_registry, db=test_db)
     fake_photo = b"fake_photo_bytes_data"
     result = await runner.handle_photo_analysis(
         user_id=111222333,

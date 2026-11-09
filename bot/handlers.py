@@ -2,7 +2,7 @@
 
 import logging
 from typing import Any
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -43,6 +43,40 @@ def _get_connector_registry(context: ContextTypes.DEFAULT_TYPE) -> ConnectorRegi
     return registry
 
 
+def format_financial_table(accounts: list) -> str:
+    """Format accounts into a razor-sharp monospace ASCII table for Telegram."""
+    lines = ["```text"]
+    lines.append(f"{'Account':<18} {'Mask':<5} {'Balance':>13}")
+    lines.append("─" * 38)
+    total_balance = 0.0
+    for a in accounts:
+        sign = "$" if a.balance >= 0 else "-$"
+        val_str = f"{sign}{abs(a.balance):,.2f}"
+        name = (a.name[:17] + "…") if len(a.name) > 17 else a.name
+        mask = a.mask or "••••"
+        lines.append(f"{name:<18} {mask:<5} {val_str:>13}")
+        total_balance += a.balance
+    lines.append("─" * 38)
+    tot_sign = "$" if total_balance >= 0 else "-$"
+    lines.append(f"{'Total Net':<18} {'':<5} {f'{tot_sign}{abs(total_balance):,.2f}':>13}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Construct interactive Telegram inline keyboard buttons for common actions."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💳 Account Balances", callback_data="cmd_balances"),
+            InlineKeyboardButton("📊 Recent Spending", callback_data="cmd_spending"),
+        ],
+        [
+            InlineKeyboardButton("⚡ Stream Alerts", callback_data="cmd_sync"),
+            InlineKeyboardButton("🤖 System Status", callback_data="cmd_status"),
+        ],
+    ])
+
+
 @authorized_only
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command for authorized users."""
@@ -50,20 +84,115 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     first_name = user.first_name if user else "there"
 
     welcome_message = (
-        f"👋 **Welcome, {first_name}!**\n\n"
-        "I am your **LifeStream Personal AI Assistant**, operating on Gemini 3.8 Flash.\n\n"
-        "**Active Capabilities:**\n"
+        f"🎩 **Welcome, {first_name}!**\n\n"
+        "I am your **LifeStream Personal AI Assistant & Executive Butler**, monitoring your life streams "
+        "and finances with discretion and precision.\n\n"
+        "**Connected Life Streams:**\n"
         "• 💰 **Monarch Money**: Live balance monitoring & spending breakdown\n"
-        "• 📬 **Gmail Alerts**: Flight tracking, high-signal alerts & receipts\n"
-        "• 📸 **Multimodal OCR**: Send receipts, invoices, or tickets for instant analysis\n"
-        "• ⚡ **Automated Tool Calling**: Query your finances and alerts conversationally\n\n"
-        "**Available Commands:**\n"
-        "/status - View system health, active streams, and rate limits\n"
-        "/sync   - Force a refresh of all life streams\n\n"
-        "Try asking me: *'What were my recent expenses?'* or simply send a photo of a receipt!"
+        "• 📬 **Gmail Alerts**: High-signal travel, flight alerts & notifications\n"
+        "• 📸 **Multimodal OCR**: Snap receipts or invoices for immediate parsing\n\n"
+        "Tap a quick action below or ask me any question directly."
     )
     if update.effective_message:
-        await _safe_reply_markdown(update.effective_message, welcome_message)
+        await update.effective_message.reply_text(
+            welcome_message,
+            parse_mode="Markdown",
+            reply_markup=get_main_menu_keyboard(),
+        )
+
+
+@authorized_only
+async def balances_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /balances command: fetches and renders formatted financial account table."""
+    if update.effective_message and update.effective_chat:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+    registry = _get_connector_registry(context)
+    monarch = registry.get("monarch")
+    if not monarch:
+        if update.effective_message:
+            await update.effective_message.reply_text("Monarch Money connector is not configured.")
+        return
+
+    accounts = await monarch.get_accounts()
+    if not accounts:
+        if update.effective_message:
+            await update.effective_message.reply_text("No active accounts found in Monarch Money.")
+        return
+
+    table_text = format_financial_table(accounts)
+    msg = f"🏛️ **Financial Accounts & Balances**\n\n{table_text}"
+    if update.effective_message:
+        await _safe_reply_markdown(update.effective_message, msg)
+
+
+@authorized_only
+async def spending_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /spending command: fetches recent transactions with clean breakdown."""
+    if update.effective_message and update.effective_chat:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+    registry = _get_connector_registry(context)
+    monarch = registry.get("monarch")
+    if not monarch:
+        if update.effective_message:
+            await update.effective_message.reply_text("Monarch Money connector is not configured.")
+        return
+
+    txs = await monarch.get_recent_transactions(limit=10)
+    if not txs:
+        if update.effective_message:
+            await update.effective_message.reply_text("No recent transactions found.")
+        return
+
+    lines = ["📊 **Recent Expenditures & Transactions:**\n"]
+    for t in txs:
+        date_str = t.timestamp.strftime("%b %d")
+        lines.append(f"• `{date_str}` **{t.merchant}** ─── `${t.amount:,.2f}`\n  *Category: {t.category}*")
+
+    if update.effective_message:
+        await _safe_reply_markdown(update.effective_message, "\n".join(lines))
+
+
+async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle taps on inline action buttons."""
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+
+    data = query.data
+    user = update.effective_user
+    settings = get_settings()
+    allowed_ids = settings.allowed_telegram_user_ids
+    if user and user.id not in allowed_ids:
+        await query.edit_message_text("⛔ Unauthorized action.")
+        return
+
+    if data == "cmd_balances":
+        registry = _get_connector_registry(context)
+        monarch = registry.get("monarch")
+        if monarch:
+            accounts = await monarch.get_accounts()
+            table_text = format_financial_table(accounts)
+            await query.message.reply_text(
+                f"🏛️ **Financial Accounts & Balances**\n\n{table_text}",
+                parse_mode="Markdown",
+            )
+    elif data == "cmd_spending":
+        registry = _get_connector_registry(context)
+        monarch = registry.get("monarch")
+        if monarch:
+            txs = await monarch.get_recent_transactions(limit=8)
+            lines = ["📊 **Recent Expenditures:**\n"]
+            for t in txs:
+                date_str = t.timestamp.strftime("%b %d")
+                lines.append(f"• `{date_str}` **{t.merchant}** ─── `${t.amount:,.2f}` ({t.category})")
+            await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    elif data == "cmd_sync":
+        await sync_command(update, context)
+    elif data == "cmd_status":
+        await status_command(update, context)
 
 
 @authorized_only

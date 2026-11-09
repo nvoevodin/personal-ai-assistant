@@ -16,6 +16,7 @@ from telegram import Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -24,8 +25,11 @@ from telegram.ext import (
 
 from agent.runner import AgentRunner
 from bot.handlers import (
+    balances_command,
+    callback_query_handler,
     error_handler,
     photo_message_handler,
+    spending_command,
     start_command,
     status_command,
     sync_command,
@@ -121,8 +125,11 @@ def build_bot_application(
 
     # 5. Register Authorized Command Handlers
     app.add_handler(CommandHandler("start", start_command, filters=whitelist_filter))
+    app.add_handler(CommandHandler("balances", balances_command, filters=whitelist_filter))
+    app.add_handler(CommandHandler("spending", spending_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("status", status_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("sync", sync_command, filters=whitelist_filter))
+    app.add_handler(CallbackQueryHandler(callback_query_handler))
 
     # 6. Register Authorized Message Handlers
     app.add_handler(
@@ -151,12 +158,28 @@ def build_bot_application(
 
 
 async def post_init(application: Application) -> None:
-    """Lifecycle hook called after bot startup to connect data streams."""
+    """Lifecycle hook called after bot startup to connect data streams and setup command menu."""
+    from telegram import BotCommand
+
     registry: ConnectorRegistry = application.bot_data.get("connector_registry")
     if registry:
         logger.info("Initializing and connecting all life-stream connectors...")
         await registry.connect_all()
         logger.info("All life-stream connectors online.")
+
+    # Configure Telegram native Menu button
+    try:
+        commands = [
+            BotCommand("start", "Executive Butler welcome & action menu"),
+            BotCommand("balances", "Monarch net worth & account table"),
+            BotCommand("spending", "Recent transactions & expenditures"),
+            BotCommand("sync", "Force sync with Monarch Money"),
+            BotCommand("status", "System & connector health status"),
+        ]
+        await application.bot.set_my_commands(commands)
+        logger.info("Configured Telegram native menu commands.")
+    except Exception as exc:
+        logger.warning("Could not set bot menu commands: %s", exc)
 
 
 def main() -> None:
