@@ -57,8 +57,13 @@ class GeminiClient:
                 return response, cand
             except Exception as exc:
                 last_error = exc
-                if "503" in str(exc) or "UNAVAILABLE" in str(exc):
-                    logger.warning("Model %s returned 503 UNAVAILABLE, checking next fallback...", cand)
+                err_msg = str(exc)
+                if any(k in err_msg for k in ["503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "quota", "Quota"]):
+                    logger.warning(
+                        "Model %s hit limit/unavailability (%s); switching to fallback...",
+                        cand,
+                        exc,
+                    )
                     continue
                 raise exc
 
