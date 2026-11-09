@@ -2,7 +2,15 @@
 
 import asyncio
 import os
+import ssl
 import sys
+import certifi
+
+# Fix macOS Python SSL certificate verification by binding to certifi's CA bundle
+os.environ["SSL_CERT_FILE"] = certifi.where()
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+
 from dotenv import set_key
 from monarchmoney import MonarchMoney
 

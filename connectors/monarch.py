@@ -1,8 +1,16 @@
 """Pluggable connector for Monarch Money financial stream supporting live API & demo fallback."""
 
 import logging
+import os
+import ssl
 from datetime import datetime, timedelta, timezone
 from typing import Any
+import certifi
+
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+
 from connectors.base import BaseConnector
 from connectors.models import LifeStreamType, MonarchAccount, MonarchTransaction, StreamEvent
 from connectors.sanitization import sanitize_payload, sanitize_text

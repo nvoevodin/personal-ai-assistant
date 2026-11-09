@@ -2,7 +2,16 @@
 
 import asyncio
 import logging
+import os
+import ssl
 import sys
+import certifi
+
+# Ensure macOS Python uses certifi root certificates for SSL/TLS connections
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
+
 from telegram import Update
 from telegram.ext import (
     Application,
