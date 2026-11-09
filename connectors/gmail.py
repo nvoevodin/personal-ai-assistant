@@ -32,9 +32,9 @@ class GmailConnector(BaseConnector):
             },
             {
                 "message_id": "msg-902",
-                "sender": "fraud-alerts@chase.com",
-                "subject": "URGENT: Suspicious charge detected on debit card ending in 4921",
-                "snippet": "Did you attempt a charge of $849.99 at BestBuy.com? Reply YES or NO. Card account #49219800129.",
+                "sender": "no-reply@accounts.google.com",
+                "subject": "Security notice: LifeStream Assistant integration active",
+                "snippet": "Your executive assistant connector was initialized securely.",
                 "received_at": now - timedelta(hours=3),
                 "category": "security",
                 "is_starred": True,

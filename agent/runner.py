@@ -1,6 +1,8 @@
 """Agent runner and tool execution routines."""
 
+import json
 import logging
+import re
 from typing import Any, Callable
 from agent.context import LifeStreamContextBuilder
 from agent.prompts import IMAGE_ANALYSIS_PROMPT, SYSTEM_INSTRUCTION
@@ -9,6 +11,7 @@ from connectors.gmail import GmailConnector
 from connectors.monarch import MonarchConnector
 from core.gemini import GeminiClient
 from core.rate_limit import RateLimiter
+from storage.db import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +24,13 @@ class AgentRunner:
         gemini_client: GeminiClient,
         registry: ConnectorRegistry,
         rate_limiter: RateLimiter | None = None,
+        db: DatabaseManager | None = None,
     ) -> None:
         self.gemini_client = gemini_client
         self.registry = registry
         self.context_builder = LifeStreamContextBuilder(registry=registry)
         self.rate_limiter = rate_limiter or RateLimiter()
+        self.db = db or DatabaseManager()
         self.tools = self._build_tool_suite()
 
     def _build_tool_suite(self) -> list[Callable[..., Any]]:
@@ -43,11 +48,11 @@ class AgentRunner:
             lines = ["**Monarch Money Balances:**"]
             for acc in accounts:
                 sign = "$" if acc.balance >= 0 else "-$"
-                lines.append(f"- {acc.name} ({acc.mask}): {sign}{abs(acc.balance):,.2f}")
+                lines.append(f"• **{acc.name}** ({acc.mask}): `{sign}{abs(acc.balance):,.2f}`")
 
             lines.append("\n**Recent Transactions:**")
             for t in txs:
-                lines.append(f"- {t.timestamp.strftime('%b %d')}: {t.merchant} - ${t.amount:,.2f} ({t.category})")
+                lines.append(f"• **{t.timestamp.strftime('%b %d')}**: {t.merchant} - `${t.amount:,.2f}` ({t.category})")
 
             return "\n".join(lines)
 
@@ -63,7 +68,7 @@ class AgentRunner:
             lines = ["**Recent Gmail Alerts:**"]
             for a in alerts:
                 if category == "all" or a.category.lower() == category.lower():
-                    lines.append(f"- [{a.category.upper()}] From: {a.sender}\n  Subject: {a.subject}\n  Snippet: {a.snippet}")
+                    lines.append(f"• `[{a.category.upper()}]` From: {a.sender}\n  Subject: {a.subject}\n  Snippet: {a.snippet}")
             return "\n".join(lines)
 
         async def get_urgent_stream_alerts() -> str:
@@ -74,7 +79,7 @@ class AgentRunner:
                 return "All streams nominal. No active urgent alerts."
             lines = ["**Active Urgent Stream Alerts:**"]
             for ev in urgent:
-                lines.append(f"- [{ev.source.upper()}] {ev.title}: {ev.summary}")
+                lines.append(f"• `[{ev.source.upper()}]` {ev.title}: {ev.summary}")
             return "\n".join(lines)
 
         return [get_financial_summary, get_recent_emails, get_urgent_stream_alerts]
@@ -85,9 +90,21 @@ class AgentRunner:
 
         # Build dynamic real-time context
         stream_context = await self.context_builder.build_context_block(max_events=10)
+
+        # Fetch recent conversational memory for multi-turn coherence
+        recent_messages = await self.db.get_recent_messages(user_id=user_id, limit=6)
+        history_block = ""
+        if recent_messages:
+            history_lines = [
+                f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}"
+                for m in recent_messages
+            ]
+            history_block = "### Recent Conversation History:\n" + "\n".join(history_lines) + "\n\n"
+
         augmented_prompt = (
             f"{stream_context}\n\n"
-            f"### User Message:\n{query}"
+            f"{history_block}"
+            f"### Current User Message:\n{query}"
         )
 
         response_text, _ = await self.gemini_client.generate_with_tools(
@@ -95,6 +112,14 @@ class AgentRunner:
             tools=self.tools,
             system_instruction=SYSTEM_INSTRUCTION,
         )
+
+        # Save turns to database
+        try:
+            await self.db.save_message(user_id=user_id, role="user", content=query)
+            await self.db.save_message(user_id=user_id, role="assistant", content=response_text)
+        except Exception as db_exc:
+            logger.warning("Failed to persist conversation history: %s", db_exc)
+
         return response_text
 
     async def handle_photo_analysis(
@@ -116,9 +141,36 @@ class AgentRunner:
             f"{caption_context}"
         )
 
-        return await self.gemini_client.analyze_image(
+        result_text = await self.gemini_client.analyze_image(
             image_bytes=image_bytes,
             mime_type=mime_type,
             prompt=prompt,
             system_instruction=SYSTEM_INSTRUCTION,
         )
+
+        # Record photo interaction and extract receipt JSON if present
+        try:
+            user_msg = f"[Photo Upload: {mime_type}] {user_caption or ''}".strip()
+            await self.db.save_message(user_id=user_id, role="user", content=user_msg)
+            await self.db.save_message(user_id=user_id, role="assistant", content=result_text)
+
+            # Check for ```json ... ``` block to auto-store receipt
+            json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", result_text, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(1))
+                if "merchant" in data and "total_amount" in data:
+                    await self.db.save_receipt(
+                        user_id=user_id,
+                        merchant=str(data["merchant"]),
+                        total_amount=float(data["total_amount"]),
+                        currency=str(data.get("currency", "USD")),
+                        tax_amount=float(data.get("tax_amount", 0.0)),
+                        receipt_date=str(data.get("date", "")),
+                        category=str(data.get("category", "General")),
+                        items=data.get("items", []),
+                        raw_summary=result_text[:500],
+                    )
+        except Exception as exc:
+            logger.warning("Failed to store photo/receipt metadata: %s", exc)
+
+        return result_text

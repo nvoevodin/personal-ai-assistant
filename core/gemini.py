@@ -28,35 +28,59 @@ class GeminiClient:
         # Support dependency injection for tests
         self.client: genai.Client = client or genai.Client(api_key=resolved_api_key)
 
+    async def _generate_content_resilient(
+        self,
+        contents: Any,
+        config: types.GenerateContentConfig,
+        model: str | None = None,
+    ) -> tuple[types.GenerateContentResponse, str]:
+        """Call Gemini API with automatic fallback if the requested model returns 503 high-demand."""
+        candidate_models = [model or self.model]
+        for fallback in ["gemini-3.5-flash", "gemini-3.1-flash-lite"]:
+            if fallback not in candidate_models:
+                candidate_models.append(fallback)
+
+        last_error = None
+        for cand in candidate_models:
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=cand,
+                    contents=contents,
+                    config=config,
+                )
+                if cand != candidate_models[0]:
+                    logger.warning(
+                        "Primary model %s was unavailable; successfully used fallback %s",
+                        candidate_models[0],
+                        cand,
+                    )
+                return response, cand
+            except Exception as exc:
+                last_error = exc
+                if "503" in str(exc) or "UNAVAILABLE" in str(exc):
+                    logger.warning("Model %s returned 503 UNAVAILABLE, checking next fallback...", cand)
+                    continue
+                raise exc
+
+        raise last_error or GeminiAPIError("All candidate models failed.")
+
     async def generate_text(
         self,
         prompt: str,
         system_instruction: str | None = None,
         temperature: float = 0.2,
     ) -> str:
-        """Generate text completions using Gemini 3.8 Flash asynchronously."""
+        """Generate text completions using Gemini asynchronously with resilient fallback."""
         try:
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 temperature=temperature,
             )
-            try:
-                response = await self.client.aio.models.generate_content(
-                    model=self.model,
-                    contents=prompt,
-                    config=config,
-                )
-                return response.text or ""
-            except Exception as exc:
-                if ("503" in str(exc) or "UNAVAILABLE" in str(exc)) and self.model != "gemini-3.5-flash":
-                    logger.warning("Model %s unavailable (503); retrying with gemini-3.5-flash", self.model)
-                    fallback_response = await self.client.aio.models.generate_content(
-                        model="gemini-3.5-flash",
-                        contents=prompt,
-                        config=config,
-                    )
-                    return fallback_response.text or ""
-                raise
+            response, _ = await self._generate_content_resilient(
+                contents=prompt,
+                config=config,
+            )
+            return response.text or ""
         except Exception as exc:
             logger.error("Gemini text generation failed: %s", exc, exc_info=True)
             raise GeminiAPIError(f"Gemini API text generation error: {exc}") from exc
@@ -82,8 +106,7 @@ class GeminiClient:
             )
             contents = [image_part, prompt]
 
-            response = await self.client.aio.models.generate_content(
-                model=self.model,
+            response, _ = await self._generate_content_resilient(
                 contents=contents,
                 config=config,
             )
@@ -120,30 +143,19 @@ class GeminiClient:
                 system_instruction=system_instruction,
                 temperature=temperature,
                 tools=tools,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             )
 
             # Initialize multi-turn contents
             contents: list[Any] = [prompt]
+            active_model = self.model
 
-            current_model = self.model
             for _ in range(max_iterations):
-                try:
-                    response = await self.client.aio.models.generate_content(
-                        model=current_model,
-                        contents=contents,
-                        config=config,
-                    )
-                except Exception as err:
-                    if ("503" in str(err) or "UNAVAILABLE" in str(err)) and current_model != "gemini-3.1-flash-lite":
-                        logger.warning("Model %s unavailable (503); retrying tool loop with gemini-3.1-flash-lite", current_model)
-                        current_model = "gemini-3.1-flash-lite"
-                        response = await self.client.aio.models.generate_content(
-                            model=current_model,
-                            contents=contents,
-                            config=config,
-                        )
-                    else:
-                        raise
+                response, active_model = await self._generate_content_resilient(
+                    contents=contents,
+                    config=config,
+                    model=active_model,
+                )
 
                 # Check if the model requested function execution
                 function_calls = getattr(response, "function_calls", None)
@@ -156,7 +168,8 @@ class GeminiClient:
                 if candidates and candidates[0].content:
                     contents.append(candidates[0].content)
 
-                # Execute every requested tool
+                # Execute every requested tool and collect function response parts
+                func_response_parts: list[Any] = []
                 for call in function_calls:
                     fn_name = call.name
                     fn_args = dict(call.args or {})
@@ -181,16 +194,19 @@ class GeminiClient:
                         "result": tool_result,
                     })
 
-                    # Feed the tool response back to the conversation
+                    func_response_parts.append(
+                        types.Part.from_function_response(
+                            name=fn_name,
+                            response={"result": tool_result},
+                        )
+                    )
+
+                # Feed all tool responses back to the conversation in a single turn
+                if func_response_parts:
                     contents.append(
                         types.Content(
                             role="user",
-                            parts=[
-                                types.Part.from_function_response(
-                                    name=fn_name,
-                                    response={"result": tool_result},
-                                )
-                            ],
+                            parts=func_response_parts,
                         )
                     )
 

@@ -33,6 +33,27 @@ async def test_agent_runner_handle_user_query(
 
 
 @pytest.mark.asyncio
+async def test_agent_runner_multi_turn_history(
+    mock_gemini_client: GeminiClient, mock_registry: ConnectorRegistry, tmp_path: pytest.TempPathFactory
+) -> None:
+    """Verify multi-turn queries pass historical conversational context into prompt."""
+    from storage.db import DatabaseManager
+
+    test_db = DatabaseManager(db_path=str(tmp_path / "test_memory.db"))
+    runner = AgentRunner(gemini_client=mock_gemini_client, registry=mock_registry, db=test_db)
+
+    # First turn
+    await runner.handle_user_query(user_id=42, query="What is my checking balance?")
+    # Second turn
+    await runner.handle_user_query(user_id=42, query="What about my credit card?")
+
+    assert mock_gemini_client.generate_with_tools.await_count == 2
+    last_call_prompt = mock_gemini_client.generate_with_tools.call_args_list[1].kwargs["prompt"]
+    assert "Recent Conversation History:" in last_call_prompt
+    assert "What is my checking balance?" in last_call_prompt
+
+
+@pytest.mark.asyncio
 async def test_agent_runner_handle_photo(
     mock_gemini_client: GeminiClient, mock_registry: ConnectorRegistry
 ) -> None:

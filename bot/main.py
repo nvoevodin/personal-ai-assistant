@@ -38,6 +38,7 @@ from connectors.monarch import MonarchConnector
 from core.config import Settings, get_settings
 from core.gemini import GeminiClient
 from core.rate_limit import RateLimiter
+from storage.db import DatabaseManager
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -94,10 +95,12 @@ def build_bot_application(
         max_calls=resolved_settings.rate_limit_calls_per_minute,
         window_seconds=60.0,
     )
+    db = DatabaseManager()
     agent_runner = AgentRunner(
         gemini_client=client,
         registry=registry,
         rate_limiter=limiter,
+        db=db,
     )
 
     # 3. Construct Telegram ApplicationBuilder

@@ -1,6 +1,7 @@
 """Telegram bot command and message handlers."""
 
 import logging
+from typing import Any
 from telegram import Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
@@ -11,6 +12,19 @@ from connectors.base import ConnectorRegistry
 from core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_reply_markdown(message: Any, text: str) -> None:
+    """Send markdown-formatted message, falling back to plain text if formatting is invalid."""
+    if not message:
+        return
+    chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] if len(text) > 4000 else [text]
+    for chunk in chunks:
+        try:
+            await message.reply_text(chunk, parse_mode="Markdown")
+        except Exception as exc:
+            logger.warning("Markdown entity parsing failed (%s); sending plain text fallback", exc)
+            await message.reply_text(chunk)
 
 
 def _get_agent_runner(context: ContextTypes.DEFAULT_TYPE) -> AgentRunner:
@@ -49,7 +63,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Try asking me: *'What were my recent expenses?'* or simply send a photo of a receipt!"
     )
     if update.effective_message:
-        await update.effective_message.reply_text(welcome_message, parse_mode="Markdown")
+        await _safe_reply_markdown(update.effective_message, welcome_message)
 
 
 @authorized_only
@@ -78,7 +92,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "✅ All systems nominal. Free-tier multimodal pipeline ready."
     )
     if update.effective_message:
-        await update.effective_message.reply_text(status_message, parse_mode="Markdown")
+        await _safe_reply_markdown(update.effective_message, status_message)
 
 
 @authorized_only
@@ -101,7 +115,7 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         lines.append(f"{icon} `[{ev.source.upper()}]` **{ev.title}**\n   {ev.summary}")
 
     if update.effective_message:
-        await update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
+        await _safe_reply_markdown(update.effective_message, "\n".join(lines))
 
 
 @authorized_only
@@ -120,10 +134,11 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     runner = _get_agent_runner(context)
     try:
         reply_text = await runner.handle_user_query(user_id=user_id, query=query)
-        await update.effective_message.reply_text(reply_text, parse_mode="Markdown")
+        await _safe_reply_markdown(update.effective_message, reply_text)
     except Exception as exc:
         logger.exception("Error processing text query from user %s: %s", user_id, exc)
-        await update.effective_message.reply_text(
+        await _safe_reply_markdown(
+            update.effective_message,
             f"⚠️ Could not process your request: {exc}",
         )
 
@@ -158,10 +173,11 @@ async def photo_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             user_caption=caption,
         )
 
-        await update.effective_message.reply_text(analysis_result, parse_mode="Markdown")
+        await _safe_reply_markdown(update.effective_message, analysis_result)
     except Exception as exc:
         logger.exception("Error processing inbound photo from user %s: %s", user_id, exc)
-        await update.effective_message.reply_text(
+        await _safe_reply_markdown(
+            update.effective_message,
             f"⚠️ Photo analysis failed: {exc}",
         )
 
