@@ -46,6 +46,18 @@ class Settings(BaseSettings):
         default=None,
         description="Optional Monarch Money session token for live account syncing",
     )
+    monarch_email: str | None = Field(
+        default=None,
+        description="Optional Monarch Money login email",
+    )
+    monarch_password: SecretStr | None = Field(
+        default=None,
+        description="Optional Monarch Money login password",
+    )
+    monarch_mfa_secret: SecretStr | None = Field(
+        default=None,
+        description="Optional Monarch Money TOTP secret for hands-free background 2FA",
+    )
 
     @field_validator("allowed_telegram_user_ids", mode="before")
     @classmethod
@@ -85,6 +97,16 @@ class Settings(BaseSettings):
     def monarch_token_value(self) -> str | None:
         """Helper to expose the raw Monarch Token safely."""
         return self.monarch_token.get_secret_value() if self.monarch_token else None
+
+    @property
+    def monarch_password_value(self) -> str | None:
+        """Helper to expose the raw Monarch Password safely."""
+        return self.monarch_password.get_secret_value() if self.monarch_password else None
+
+    @property
+    def monarch_mfa_secret_value(self) -> str | None:
+        """Helper to expose the raw Monarch MFA secret safely."""
+        return self.monarch_mfa_secret.get_secret_value() if self.monarch_mfa_secret else None
 
     def is_user_allowed(self, user_id: int | None) -> bool:
         """Determine if a Telegram user ID is whitelisted."""

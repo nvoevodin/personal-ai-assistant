@@ -15,23 +15,59 @@ from connectors.base import BaseConnector
 from connectors.models import LifeStreamType, MonarchAccount, MonarchTransaction, StreamEvent
 from connectors.sanitization import sanitize_payload, sanitize_text
 
+# Update Monarch endpoint to new production domain to avoid 301 redirects
+from monarchmoney.monarchmoney import MonarchMoneyEndpoints
+MonarchMoneyEndpoints.BASE_URL = "https://api.monarch.com"
+
 logger = logging.getLogger(__name__)
 
 
 class MonarchConnector(BaseConnector):
-    """Monarch Money financial connector with live session token support and mock fallback."""
+    """Monarch Money financial connector with live session token, hands-free MFA login, and mock fallback."""
 
-    def __init__(self, name: str = "monarch", token: str | None = None) -> None:
+    def __init__(
+        self,
+        name: str = "monarch",
+        token: str | None = None,
+        email: str | None = None,
+        password: str | None = None,
+        mfa_secret: str | None = None,
+    ) -> None:
         super().__init__(name=name, stream_type=LifeStreamType.FINANCE)
         self.token = token
+        self.email = email
+        self.password = password
+        self.mfa_secret = mfa_secret
         self._client: Any = None
 
     async def connect(self) -> None:
-        """Establish connection with Monarch Money API using session token if present."""
-        if self.token:
-            try:
-                from monarchmoney import MonarchMoney
+        """Establish connection with Monarch Money API using credentials or session token."""
+        from monarchmoney import MonarchMoney
 
+        # Priority 1: Automated credentials with hands-free MFA secret
+        if self.email and self.password:
+            try:
+                client = MonarchMoney()
+                await client.login(
+                    email=self.email,
+                    password=self.password,
+                    mfa_secret_key=self.mfa_secret,
+                    use_saved_session=True,
+                    save_session=True,
+                )
+                self._client = client
+                self.is_connected = True
+                logger.info("MonarchConnector authenticated hands-free via email + password + MFA.")
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Monarch automated login failed (%s); checking token or mock fallback.",
+                    exc,
+                )
+
+        # Priority 2: Session token
+        if self.token and self.token != "your_token_here":
+            try:
                 client = MonarchMoney()
                 client.set_token(self.token)
                 self._client = client
@@ -40,7 +76,7 @@ class MonarchConnector(BaseConnector):
                 return
             except Exception as exc:
                 logger.warning(
-                    "Failed to authenticate with live Monarch API: %s; falling back to demo mode.",
+                    "Failed to authenticate with live Monarch API via token: %s; falling back to demo mode.",
                     exc,
                 )
                 self._client = None

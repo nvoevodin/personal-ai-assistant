@@ -31,7 +31,14 @@ async def main() -> None:
     print("• Initializing LifeStream Connectors...")
 
     registry = ConnectorRegistry()
-    registry.register(MonarchConnector(token=settings.monarch_token_value))
+    registry.register(
+        MonarchConnector(
+            token=settings.monarch_token_value,
+            email=settings.monarch_email,
+            password=settings.monarch_password_value,
+            mfa_secret=settings.monarch_mfa_secret_value,
+        )
+    )
     registry.register(GmailConnector())
     await registry.connect_all()
 
