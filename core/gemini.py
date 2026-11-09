@@ -134,9 +134,9 @@ class GeminiClient:
                         config=config,
                     )
                 except Exception as err:
-                    if ("503" in str(err) or "UNAVAILABLE" in str(err)) and current_model != "gemini-3.5-flash":
-                        logger.warning("Model %s unavailable (503); retrying tool loop with gemini-3.5-flash", current_model)
-                        current_model = "gemini-3.5-flash"
+                    if ("503" in str(err) or "UNAVAILABLE" in str(err)) and current_model != "gemini-3.1-flash-lite":
+                        logger.warning("Model %s unavailable (503); retrying tool loop with gemini-3.1-flash-lite", current_model)
+                        current_model = "gemini-3.1-flash-lite"
                         response = await self.client.aio.models.generate_content(
                             model=current_model,
                             contents=contents,

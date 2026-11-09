@@ -29,7 +29,7 @@ class Settings(BaseSettings):
         description="Whitelist of allowed Telegram user IDs permitted to access the bot",
     )
     gemini_model: str = Field(
-        default="gemini-3.8-flash",
+        default="gemini-3.1-flash-lite",
         description="Gemini model identifier for text and multimodal OCR operations",
     )
     log_level: str = Field(
