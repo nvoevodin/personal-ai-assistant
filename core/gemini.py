@@ -40,12 +40,23 @@ class GeminiClient:
                 system_instruction=system_instruction,
                 temperature=temperature,
             )
-            response = await self.client.aio.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=config,
-            )
-            return response.text or ""
+            try:
+                response = await self.client.aio.models.generate_content(
+                    model=self.model,
+                    contents=prompt,
+                    config=config,
+                )
+                return response.text or ""
+            except Exception as exc:
+                if ("503" in str(exc) or "UNAVAILABLE" in str(exc)) and self.model != "gemini-3.5-flash":
+                    logger.warning("Model %s unavailable (503); retrying with gemini-3.5-flash", self.model)
+                    fallback_response = await self.client.aio.models.generate_content(
+                        model="gemini-3.5-flash",
+                        contents=prompt,
+                        config=config,
+                    )
+                    return fallback_response.text or ""
+                raise
         except Exception as exc:
             logger.error("Gemini text generation failed: %s", exc, exc_info=True)
             raise GeminiAPIError(f"Gemini API text generation error: {exc}") from exc
@@ -114,12 +125,25 @@ class GeminiClient:
             # Initialize multi-turn contents
             contents: list[Any] = [prompt]
 
+            current_model = self.model
             for _ in range(max_iterations):
-                response = await self.client.aio.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=config,
-                )
+                try:
+                    response = await self.client.aio.models.generate_content(
+                        model=current_model,
+                        contents=contents,
+                        config=config,
+                    )
+                except Exception as err:
+                    if ("503" in str(err) or "UNAVAILABLE" in str(err)) and current_model != "gemini-3.5-flash":
+                        logger.warning("Model %s unavailable (503); retrying tool loop with gemini-3.5-flash", current_model)
+                        current_model = "gemini-3.5-flash"
+                        response = await self.client.aio.models.generate_content(
+                            model=current_model,
+                            contents=contents,
+                            config=config,
+                        )
+                    else:
+                        raise
 
                 # Check if the model requested function execution
                 function_calls = getattr(response, "function_calls", None)
