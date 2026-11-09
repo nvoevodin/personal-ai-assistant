@@ -23,28 +23,45 @@ logger = logging.getLogger(__name__)
 
 
 class MonarchConnector(BaseConnector):
-    """Monarch Money financial connector with live session token, hands-free MFA login, and mock fallback."""
+    """Monarch Money financial connector with live session token, browser cookie, and mock fallback."""
 
     def __init__(
         self,
         name: str = "monarch",
         token: str | None = None,
+        cookie: str | None = None,
         email: str | None = None,
         password: str | None = None,
         mfa_secret: str | None = None,
     ) -> None:
         super().__init__(name=name, stream_type=LifeStreamType.FINANCE)
         self.token = token
+        self.cookie = cookie
         self.email = email
         self.password = password
         self.mfa_secret = mfa_secret
         self._client: Any = None
 
     async def connect(self) -> None:
-        """Establish connection with Monarch Money API using credentials or session token."""
+        """Establish connection with Monarch Money API using cookie, credentials, or session token."""
         from monarchmoney import MonarchMoney
 
-        # Priority 1: Automated credentials with hands-free MFA secret
+        # Priority 1: Authenticated browser cookie session
+        if self.cookie and self.cookie.strip() and "session_id" in self.cookie:
+            try:
+                client = MonarchMoney()
+                await client.login_with_cookies(self.cookie.strip())
+                self._client = client
+                self.is_connected = True
+                logger.info("MonarchConnector successfully authenticated via live browser cookie session.")
+                return
+            except Exception as exc:
+                logger.warning(
+                    "Monarch cookie authentication failed (%s); checking credentials or fallback.",
+                    exc,
+                )
+
+        # Priority 2: Automated credentials with hands-free MFA secret
         if self.email and self.password:
             try:
                 client = MonarchMoney()
@@ -65,7 +82,7 @@ class MonarchConnector(BaseConnector):
                     exc,
                 )
 
-        # Priority 2: Session token
+        # Priority 3: Session token
         if self.token and self.token != "your_token_here":
             try:
                 client = MonarchMoney()

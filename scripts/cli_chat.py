@@ -34,6 +34,7 @@ async def main() -> None:
     registry.register(
         MonarchConnector(
             token=settings.monarch_token_value,
+            cookie=settings.monarch_cookie_value,
             email=settings.monarch_email,
             password=settings.monarch_password_value,
             mfa_secret=settings.monarch_mfa_secret_value,

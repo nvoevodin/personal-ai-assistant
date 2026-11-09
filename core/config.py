@@ -58,6 +58,10 @@ class Settings(BaseSettings):
         default=None,
         description="Optional Monarch Money TOTP secret for hands-free background 2FA",
     )
+    monarch_cookie: SecretStr | None = Field(
+        default=None,
+        description="Optional Monarch Money session cookie for authenticated GraphQL calls",
+    )
 
     @field_validator("allowed_telegram_user_ids", mode="before")
     @classmethod
@@ -107,6 +111,11 @@ class Settings(BaseSettings):
     def monarch_mfa_secret_value(self) -> str | None:
         """Helper to expose the raw Monarch MFA secret safely."""
         return self.monarch_mfa_secret.get_secret_value() if self.monarch_mfa_secret else None
+
+    @property
+    def monarch_cookie_value(self) -> str | None:
+        """Helper to expose the raw Monarch session cookie safely."""
+        return self.monarch_cookie.get_secret_value() if self.monarch_cookie else None
 
     def is_user_allowed(self, user_id: int | None) -> bool:
         """Determine if a Telegram user ID is whitelisted."""

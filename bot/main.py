@@ -77,6 +77,7 @@ def build_bot_application(
         registry.register(
             MonarchConnector(
                 token=resolved_settings.monarch_token_value,
+                cookie=resolved_settings.monarch_cookie_value,
                 email=resolved_settings.monarch_email,
                 password=resolved_settings.monarch_password_value,
                 mfa_secret=resolved_settings.monarch_mfa_secret_value,
