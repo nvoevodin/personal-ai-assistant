@@ -99,7 +99,17 @@ pytest
 
 ---
 
-## 💻 Running the Bot
+## 💻 Running the Assistant
+
+### Local Interactive CLI (No Telegram Required)
+
+You can test the agent and tools directly in your terminal:
+
+```bash
+python scripts/cli_chat.py
+```
+
+### Running the Telegram Bot
 
 To start the bot daemon:
 
@@ -113,6 +123,20 @@ Then open Telegram and interact with your bot:
 - `/sync` - Fetch fresh event digest across all connected accounts
 - Send a text message (e.g. *"What is my current net worth and recent spending?"*)
 - Send a photo or receipt attachment for instant OCR parsing and extraction
+
+### Running via Docker Compose
+
+Run the bot as a background container:
+
+```bash
+docker compose up -d --build
+```
+
+View container logs:
+
+```bash
+docker compose logs -f
+```
 
 ---
 
