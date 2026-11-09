@@ -1,0 +1,90 @@
+"""Application configuration and environment variable validation using Pydantic Settings."""
+
+import functools
+from typing import Any
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Strongly typed application configuration validated from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    telegram_bot_token: SecretStr = Field(
+        ...,
+        description="Telegram Bot API token issued by @BotFather",
+    )
+    gemini_api_key: SecretStr = Field(
+        ...,
+        description="Google Gemini API key from Google AI Studio",
+    )
+    allowed_telegram_user_ids: set[int] | str = Field(
+        ...,
+        description="Whitelist of allowed Telegram user IDs permitted to access the bot",
+    )
+    gemini_model: str = Field(
+        default="gemini-3.8-flash",
+        description="Gemini model identifier for text and multimodal OCR operations",
+    )
+    log_level: str = Field(
+        default="INFO",
+        description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+    rate_limit_calls_per_minute: int = Field(
+        default=30,
+        ge=1,
+        le=300,
+        description="Maximum permitted LLM invocations per minute per user",
+    )
+
+    @field_validator("allowed_telegram_user_ids", mode="before")
+    @classmethod
+    def parse_allowed_user_ids(cls, v: Any) -> set[int]:
+        """Parse comma-separated strings, lists, or numbers into a set of integer IDs."""
+        if isinstance(v, str):
+            # Split comma or whitespace separated values
+            tokens = [token.strip() for token in v.replace(";", ",").split(",") if token.strip()]
+            if not tokens:
+                raise ValueError("ALLOWED_TELEGRAM_USER_IDS must contain at least one valid user ID")
+            try:
+                return {int(tok) for tok in tokens}
+            except ValueError as err:
+                raise ValueError(f"Invalid user ID in ALLOWED_TELEGRAM_USER_IDS: {err}") from err
+
+        if isinstance(v, (list, tuple, set)):
+            if not v:
+                raise ValueError("ALLOWED_TELEGRAM_USER_IDS cannot be empty")
+            return {int(item) for item in v}
+
+        if isinstance(v, int):
+            return {v}
+
+        raise ValueError(f"Cannot parse ALLOWED_TELEGRAM_USER_IDS from type: {type(v)}")
+
+    @property
+    def telegram_token_value(self) -> str:
+        """Helper to expose the raw Telegram Bot Token safely."""
+        return self.telegram_bot_token.get_secret_value()
+
+    @property
+    def gemini_api_key_value(self) -> str:
+        """Helper to expose the raw Gemini API Key safely."""
+        return self.gemini_api_key.get_secret_value()
+
+    def is_user_allowed(self, user_id: int | None) -> bool:
+        """Determine if a Telegram user ID is whitelisted."""
+        if user_id is None:
+            return False
+        return user_id in self.allowed_telegram_user_ids
+
+
+@functools.lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Singleton getter for validated application settings."""
+    return Settings()
