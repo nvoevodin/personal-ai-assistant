@@ -6,6 +6,7 @@ from telegram import Chat, Message, PhotoSize, Update, User
 from telegram.ext import ContextTypes
 
 from bot.handlers import (
+    bills_command,
     error_handler,
     photo_message_handler,
     start_command,
@@ -192,6 +193,51 @@ async def test_unauthorized_user_blocked() -> None:
     update.effective_message.reply_text.assert_awaited_once()
     reply = update.effective_message.reply_text.call_args[0][0]
     assert "Access Denied" in reply
+
+
+@pytest.mark.asyncio
+async def test_bills_command(mock_bot_context: MagicMock) -> None:
+    """Verify /bills command renders upcoming recurring payment schedule."""
+    mock_monarch = MagicMock()
+    mock_monarch.get_recurring_obligations = AsyncMock(return_value=[
+        {
+            "id": "rec-hyundai",
+            "name": "Hyundai (Car Payment)",
+            "category": "auto_loan",
+            "amount": 256.28,
+            "frequency": "monthly",
+            "next_due_date": "2026-11-13",
+            "is_income": False,
+        },
+        {
+            "id": "rec-progressive",
+            "name": "Progressive Auto Insurance",
+            "category": "insurance",
+            "amount": 404.00,
+            "frequency": "monthly",
+            "next_due_date": "2026-11-11",
+            "is_income": False,
+        },
+    ])
+    mock_monarch.get_accounts = AsyncMock(return_value=[])
+    registry = mock_bot_context.bot_data["connector_registry"]
+    registry.get.return_value = mock_monarch
+
+    update = MagicMock(spec=Update)
+    update.effective_user = MagicMock(spec=User)
+    update.effective_user.id = 111222333
+    update.effective_chat = MagicMock(spec=Chat)
+    update.effective_chat.id = 12345
+    update.effective_message = MagicMock(spec=Message)
+    update.effective_message.reply_text = AsyncMock()
+
+    await bills_command(update, mock_bot_context)
+
+    update.effective_message.reply_text.assert_awaited_once()
+    reply = update.effective_message.reply_text.call_args[0][0]
+    assert "Upcoming Payment Obligations" in reply
+    assert "Hyundai" in reply
+    assert "Progressive" in reply
 
 
 def test_build_bot_application(test_settings: Settings, mock_gemini_client: GeminiClient) -> None:

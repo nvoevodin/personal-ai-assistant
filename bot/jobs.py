@@ -32,6 +32,24 @@ async def poll_and_triage_streams(context: ContextTypes.DEFAULT_TYPE) -> None:
 
     logger.debug("Background poller collected %d events across all connectors.", len(events))
 
+    # Sync recurring payment obligations (car payments, bills, subscriptions)
+    monarch = registry.get("monarch")
+    if monarch and hasattr(monarch, "get_recurring_obligations") and runner.db:
+        try:
+            obligations = await monarch.get_recurring_obligations()
+            for ob in obligations:
+                await runner.db.upsert_payment_obligation(
+                    obligation_id=ob["id"],
+                    name=ob["name"],
+                    category=ob.get("category", "bills"),
+                    amount=float(ob.get("amount", 0.0)),
+                    frequency=ob.get("frequency", "monthly"),
+                    next_due_date=ob.get("next_due_date"),
+                    notes=ob.get("notes"),
+                )
+        except Exception as ob_err:
+            logger.debug("Failed updating recurring obligations in background poll: %s", ob_err)
+
     for ev in events:
         try:
             # Skip if already triaged or notified
@@ -114,6 +132,7 @@ async def send_daily_executive_briefing(
 
     logger.info("Generating executive morning briefing...")
     table_str = ""
+    obligations_str = ""
     monarch = registry.get("monarch")
     if monarch:
         try:
@@ -122,11 +141,21 @@ async def send_daily_executive_briefing(
         except Exception as exc:
             logger.warning("Could not fetch accounts for morning briefing: %s", exc)
 
+        if hasattr(monarch, "get_recurring_obligations"):
+            try:
+                obs = await monarch.get_recurring_obligations()
+                if obs:
+                    from ux.layout import format_obligations_table
+                    obligations_str = format_obligations_table(obs[:5])
+            except Exception as o_err:
+                logger.debug("Could not fetch obligations for morning briefing: %s", o_err)
+
     prompt = (
         "You are an elite, discreet Executive Butler providing the morning briefing.\n"
         "Draft a crisp, elegant, 2-3 sentence morning salutation and liquidity overview.\n"
-        "Acknowledge that life streams and accounts are actively monitored.\n"
-        f"Accounts Snapshot:\n{table_str}"
+        "Acknowledge that life streams, payment obligations, and accounts are actively monitored.\n"
+        f"Accounts Snapshot:\n{table_str}\n"
+        + (f"Upcoming Obligations:\n{obligations_str}\n" if obligations_str else "")
     )
 
     briefing_text = ""
@@ -153,7 +182,8 @@ async def send_daily_executive_briefing(
         "🎩 **Executive Morning Briefing**\n\n"
         f"{briefing_text}\n\n"
         f"{table_str}\n\n"
-        "_LifeStream Assistant Online_"
+        + (f"📅 **Upcoming Payment Obligations:**\n{obligations_str}\n\n" if obligations_str else "")
+        + "_LifeStream Assistant Online_"
     )
 
     recipients = [target_chat_id] if target_chat_id else settings.allowed_telegram_user_ids

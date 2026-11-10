@@ -282,6 +282,80 @@ class MonarchConnector(BaseConnector):
 
         return events
 
+    async def get_recurring_obligations(self) -> list[dict[str, Any]]:
+        """Fetch recurring bills, auto loans, insurance, and subscription payment dates."""
+        if not self._client:
+            return [
+                {
+                    "id": "monarch-rec-hyundai",
+                    "name": "Hyundai (Car Payment)",
+                    "category": "auto_loan",
+                    "amount": 256.28,
+                    "frequency": "monthly",
+                    "next_due_date": "2026-11-13",
+                    "due_day_of_month": 13,
+                    "is_income": False,
+                    "notes": "Auto loan monthly financing installment",
+                },
+                {
+                    "id": "monarch-rec-progressive",
+                    "name": "Progressive Auto Insurance",
+                    "category": "insurance",
+                    "amount": 404.00,
+                    "frequency": "monthly",
+                    "next_due_date": "2026-11-11",
+                    "due_day_of_month": 11,
+                    "is_income": False,
+                    "notes": "Vehicle insurance monthly premium",
+                },
+            ]
+
+        try:
+            res = await self._client.get_recurring_transaction_streams()
+            streams = res.get("recurringTransactionStreams", [])
+            obligations: list[dict[str, Any]] = []
+            for item in streams:
+                st = item.get("stream") or {}
+                if not st.get("isActive", True):
+                    continue
+                name = st.get("name") or "Recurring Bill"
+                amt = float(st.get("amount") or 0.0)
+                is_income = st.get("recurringType") == "income" or amt > 0
+                abs_amt = abs(amt)
+                freq = st.get("frequency") or "monthly"
+                next_tx = item.get("nextForecastedTransaction") or {}
+                next_date = next_tx.get("date") or st.get("baseDate")
+
+                cat = "general"
+                lower_name = name.lower()
+                if "hyundai" in lower_name or "auto" in lower_name or "car" in lower_name:
+                    cat = "auto_loan"
+                elif "progressive" in lower_name or "geico" in lower_name or "state farm" in lower_name:
+                    cat = "insurance"
+                elif is_income:
+                    cat = "income"
+                elif any(u in lower_name for u in ["power", "light", "water", "electric", "gas", "utility"]):
+                    cat = "utilities"
+                elif any(i in lower_name for i in ["internet", "frontier", "verizon", "at&t", "comcast", "spectrum"]):
+                    cat = "internet"
+                elif any(s in lower_name for s in ["google", "netflix", "spotify", "apple", "gym", "fit"]):
+                    cat = "subscription"
+
+                obligations.append({
+                    "id": f"monarch-rec-{st.get('id', name.lower().replace(' ', '-'))}",
+                    "name": f"{name} (Car Payment)" if cat == "auto_loan" and "car" not in lower_name else name,
+                    "category": cat,
+                    "amount": abs_amt,
+                    "frequency": freq,
+                    "next_due_date": next_date,
+                    "is_income": is_income,
+                    "notes": f"Monarch Money recurring stream ({freq})",
+                })
+            return obligations
+        except Exception as exc:
+            logger.error("Failed fetching recurring streams from Monarch API: %s", exc)
+            return []
+
     async def get_health(self) -> dict[str, Any]:
         """Return connector health status."""
         return {

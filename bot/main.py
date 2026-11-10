@@ -26,6 +26,7 @@ from telegram.ext import (
 from agent.runner import AgentRunner
 from bot.handlers import (
     balances_command,
+    bills_command,
     briefing_command,
     callback_query_handler,
     deep_analysis_command,
@@ -134,6 +135,7 @@ def build_bot_application(
     # 5. Register Authorized Command Handlers
     app.add_handler(CommandHandler("start", start_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("balances", balances_command, filters=whitelist_filter))
+    app.add_handler(CommandHandler("bills", bills_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("spending", spending_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("status", status_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("sync", sync_command, filters=whitelist_filter))
@@ -183,6 +185,7 @@ async def post_init(application: Application) -> None:
         commands = [
             BotCommand("start", "Executive Butler welcome & action menu"),
             BotCommand("balances", "Monarch net worth & account table"),
+            BotCommand("bills", "Upcoming car payment & credit card due dates"),
             BotCommand("spending", "Recent transactions & expenditures"),
             BotCommand("audit", "Frontier financial audit (gpt-6.1-sol)"),
             BotCommand("deep", "Deep reasoning simulation & projections"),

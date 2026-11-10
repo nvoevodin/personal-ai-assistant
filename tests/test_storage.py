@@ -83,3 +83,38 @@ async def test_spending_summary_aggregation(temp_db: DatabaseManager) -> None:
     assert summary["total_spent"] == 150.0
     assert summary["categories"]["Shopping"] == 100.0
     assert summary["categories"]["Dining"] == 50.0
+
+
+@pytest.mark.asyncio
+async def test_payment_obligations_storage(temp_db: DatabaseManager) -> None:
+    """Verify upserting and retrieving recurring payment obligations and car payment dates."""
+    await temp_db.upsert_payment_obligation(
+        obligation_id="rec-hyundai",
+        name="Hyundai (Car Payment)",
+        category="auto_loan",
+        amount=256.28,
+        frequency="monthly",
+        due_day_of_month=13,
+        next_due_date="2026-11-13",
+        notes="Auto financing installment",
+    )
+    await temp_db.upsert_payment_obligation(
+        obligation_id="rec-progressive",
+        name="Progressive Auto Insurance",
+        category="insurance",
+        amount=404.00,
+        frequency="monthly",
+        due_day_of_month=11,
+        next_due_date="2026-11-11",
+        notes="Vehicle coverage",
+    )
+
+    obligations = await temp_db.get_upcoming_payment_obligations(limit=10)
+    assert len(obligations) == 2
+    # Chronological sort: Progressive (Nov 11) before Hyundai (Nov 13)
+    assert obligations[0]["name"] == "Progressive Auto Insurance"
+    assert obligations[0]["amount"] == 404.00
+    assert obligations[0]["next_due_date"] == "2026-11-11"
+    assert obligations[1]["name"] == "Hyundai (Car Payment)"
+    assert obligations[1]["amount"] == 256.28
+    assert obligations[1]["next_due_date"] == "2026-11-13"

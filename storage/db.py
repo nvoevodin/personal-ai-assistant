@@ -112,6 +112,28 @@ class DatabaseManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+
+            # 6. Payment obligations & recurring bills (car payment, credit cards, insurance)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS payment_obligations (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    amount REAL,
+                    frequency TEXT DEFAULT 'monthly',
+                    due_day_of_month INTEGER,
+                    next_due_date TEXT,
+                    account_mask TEXT,
+                    autopay BOOLEAN DEFAULT 0,
+                    source TEXT DEFAULT 'monarch',
+                    notes TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_obligations_due_date
+                ON payment_obligations (next_due_date ASC);
+            """)
             conn.commit()
 
     async def save_message(self, user_id: int, role: str, content: str) -> None:
@@ -364,3 +386,72 @@ class DatabaseManager:
             )
             row = cursor.fetchone()
             return row["ux_style"] if row else "executive"
+
+    async def upsert_payment_obligation(
+        self,
+        obligation_id: str,
+        name: str,
+        category: str,
+        amount: float | None = None,
+        frequency: str = "monthly",
+        due_day_of_month: int | None = None,
+        next_due_date: str | None = None,
+        account_mask: str | None = None,
+        autopay: bool = False,
+        source: str = "monarch",
+        notes: str | None = None,
+    ) -> None:
+        """Persist or update a recurring bill, car payment, or loan obligation."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO payment_obligations (
+                    id, name, category, amount, frequency, due_day_of_month,
+                    next_due_date, account_mask, autopay, source, notes, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    category = excluded.category,
+                    amount = excluded.amount,
+                    frequency = excluded.frequency,
+                    due_day_of_month = excluded.due_day_of_month,
+                    next_due_date = excluded.next_due_date,
+                    account_mask = excluded.account_mask,
+                    autopay = excluded.autopay,
+                    source = excluded.source,
+                    notes = excluded.notes,
+                    updated_at = CURRENT_TIMESTAMP;
+                """,
+                (
+                    obligation_id,
+                    name,
+                    category,
+                    amount,
+                    frequency,
+                    due_day_of_month,
+                    next_due_date,
+                    account_mask,
+                    1 if autopay else 0,
+                    source,
+                    notes,
+                ),
+            )
+            conn.commit()
+
+    async def get_upcoming_payment_obligations(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Retrieve chronological upcoming recurring bills and loan payment dates."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, name, category, amount, frequency, due_day_of_month,
+                       next_due_date, account_mask, autopay, source, notes, updated_at
+                FROM payment_obligations
+                ORDER BY next_due_date ASC, name ASC
+                LIMIT ?;
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]

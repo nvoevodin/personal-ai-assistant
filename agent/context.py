@@ -1,8 +1,11 @@
 """Life-stream context builder aggregating real-time data across connectors."""
 
+import logging
 from datetime import datetime, timezone
 from connectors.base import ConnectorRegistry
 from connectors.models import LifeStreamType, StreamEvent
+
+logger = logging.getLogger(__name__)
 
 
 class LifeStreamContextBuilder:
@@ -12,20 +15,54 @@ class LifeStreamContextBuilder:
         self.registry = registry
 
     async def build_context_block(self, max_events: int = 15) -> str:
-        """Fetch latest events from registered connectors and format into a Markdown prompt block."""
+        """Fetch latest events, bills, and account balances into an executive prompt block."""
         events: list[StreamEvent] = await self.registry.fetch_all_events(limit_per_connector=max_events)
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        if not events:
-            return f"### Current Life Stream Context (Timestamp: {now_str})\n*No recent events detected across monitored streams.*"
-
-        urgent_events = [e for e in events if e.is_urgent]
-        normal_events = [e for e in events if not e.is_urgent]
 
         lines = [
             f"### Current Life Stream Snapshot (Recorded: {now_str})",
             "",
         ]
+
+        # 1. Upcoming Payment Obligations (Car payments, insurance, bills)
+        monarch = self.registry.get("monarch")
+        if monarch and hasattr(monarch, "get_recurring_obligations"):
+            try:
+                obligations = await monarch.get_recurring_obligations()
+                if obligations:
+                    lines.append("📅 **UPCOMING BILLS & RECURRING PAYMENT DATES:**")
+                    for ob in obligations:
+                        due = ob.get("next_due_date") or "Scheduled"
+                        amt = f"${ob['amount']:,.2f}"
+                        cat = ob.get("category", "").upper()
+                        sign = "+" if ob.get("is_income") else "-"
+                        lines.append(f"- **{ob['name']}** [{cat}]: `{sign}{amt}` (Next Date: {due})")
+                    lines.append("")
+            except Exception as exc:
+                logger.debug("Failed adding recurring obligations to context: %s", exc)
+
+        # 2. Credit Cards & Cash Balances
+        if monarch and hasattr(monarch, "get_accounts"):
+            try:
+                accounts = await monarch.get_accounts()
+                credit_cards = [a for a in accounts if a.type == "credit"]
+                cash_accounts = [a for a in accounts if a.type in {"checking", "savings", "depository"}]
+                if credit_cards or cash_accounts:
+                    lines.append("💳 **CREDIT CARDS & CASH LIQUIDITY:**")
+                    for c in credit_cards:
+                        lines.append(f"- Credit Card: **{c.name}** ({c.mask}) | Current Balance: `-${abs(c.balance):,.2f}`")
+                    for k in cash_accounts:
+                        lines.append(f"- Cash: **{k.name}** ({k.mask}) | Available: `${k.balance:,.2f}`")
+                    lines.append("")
+            except Exception as exc:
+                logger.debug("Failed adding account balances to context: %s", exc)
+
+        if not events:
+            lines.append("*No recent raw stream alerts detected across monitored streams.*")
+            return "\n".join(lines)
+
+        urgent_events = [e for e in events if e.is_urgent]
+        normal_events = [e for e in events if not e.is_urgent]
 
         if urgent_events:
             lines.append("⚠️ **URGENT ALERTS / CRITICAL STREAM EVENTS:**")

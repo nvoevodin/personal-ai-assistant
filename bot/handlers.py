@@ -13,6 +13,7 @@ from core.config import get_settings
 from ux import (
     format_financial_accounts,
     format_header,
+    format_obligations_table,
     format_transactions_card,
     get_ux_feedback_keyboard,
     handle_ux_callback,
@@ -62,14 +63,17 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("💳 Account Balances", callback_data="cmd_balances"),
+            InlineKeyboardButton("📅 Payment Dates", callback_data="cmd_bills"),
+        ],
+        [
             InlineKeyboardButton("📊 Recent Spending", callback_data="cmd_spending"),
-        ],
-        [
             InlineKeyboardButton("🌅 Executive Briefing", callback_data="cmd_briefing"),
-            InlineKeyboardButton("🎨 UX Studio", callback_data="ux_menu_main"),
         ],
         [
+            InlineKeyboardButton("🎨 UX Studio", callback_data="ux_menu_main"),
             InlineKeyboardButton("⚡ Stream Alerts", callback_data="cmd_sync"),
+        ],
+        [
             InlineKeyboardButton("🤖 System Status", callback_data="cmd_status"),
         ],
     ])
@@ -157,6 +161,70 @@ async def spending_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
+@authorized_only
+async def bills_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /bills command: fetches and renders upcoming payment dates (car payment, credit cards, bills)."""
+    if update.effective_message and update.effective_chat:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+    registry = _get_connector_registry(context)
+    runner = _get_agent_runner(context)
+    monarch = registry.get("monarch")
+
+    obligations = []
+    if monarch and hasattr(monarch, "get_recurring_obligations"):
+        try:
+            obligations = await monarch.get_recurring_obligations()
+        except Exception as exc:
+            logger.warning("Failed fetching obligations from Monarch: %s", exc)
+
+    if not obligations and runner and runner.db:
+        try:
+            obligations = await runner.db.get_upcoming_payment_obligations(limit=25)
+        except Exception as exc:
+            logger.warning("Failed fetching obligations from DB: %s", exc)
+
+    if not obligations:
+        if update.effective_message:
+            await update.effective_message.reply_text("No upcoming payment obligations found.")
+        return
+
+    # Sort obligations chronologically by next_due_date
+    obligations = sorted(
+        obligations,
+        key=lambda x: str(x.get("next_due_date") or "9999-99-99"),
+    )
+
+    table_text = format_obligations_table(obligations)
+
+    # Also list credit card balances if available
+    cc_lines = []
+    if monarch and hasattr(monarch, "get_accounts"):
+        try:
+            accounts = await monarch.get_accounts()
+            credit_cards = [a for a in accounts if getattr(a, "type", "") == "credit"]
+            if credit_cards:
+                cc_lines.append("\n💳 **Credit Card Balances & Obligations:**")
+                for c in credit_cards:
+                    cc_lines.append(f"• `{c.mask or '••••'}` **{c.name}**: `${abs(c.balance):,.2f}`")
+        except Exception as exc:
+            logger.debug("Failed fetching credit cards for bills command: %s", exc)
+
+    cc_section = "\n".join(cc_lines) if cc_lines else ""
+    msg = (
+        f"{format_header('Upcoming Payment Obligations & Bills', badge='SCHEDULE', emoji='📅')}\n\n"
+        f"{table_text}"
+        f"{cc_section}"
+    )
+
+    if update.effective_message:
+        await _safe_reply_markdown(
+            update.effective_message,
+            msg,
+            reply_markup=get_ux_feedback_keyboard(context_tag="bills"),
+        )
+
+
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle taps on inline action buttons."""
     query = update.callback_query
@@ -199,6 +267,8 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="Markdown",
                 reply_markup=get_ux_feedback_keyboard(context_tag="spending"),
             )
+    elif data == "cmd_bills":
+        await bills_command(update, context)
     elif data == "cmd_briefing":
         from bot.jobs import send_daily_executive_briefing
         chat_id = update.effective_chat.id if update.effective_chat else None

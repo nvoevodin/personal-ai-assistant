@@ -123,6 +123,39 @@ def format_transactions_card(transactions: list, limit: int = 5) -> str:
     return "\n".join(lines)
 
 
+def format_obligations_table(obligations: list[dict[str, Any]]) -> str:
+    """Format upcoming recurring bills, car loans, and credit card obligations into a monospace schedule."""
+    if not obligations:
+        return "_No upcoming payment obligations scheduled._"
+
+    headers = ["Due Date", "Obligation", "Amount", "Category"]
+    rows = []
+    for ob in obligations:
+        due = str(ob.get("next_due_date") or "Scheduled")
+        if len(due) == 10 and "-" in due:
+            try:
+                parts = due.split("-")
+                month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+                due = f"{month_names[int(parts[1])]} {int(parts[2]):02d}"
+            except Exception:
+                pass
+        name = str(ob.get("name") or "Bill")
+        if len(name) > 22:
+            name = name[:21] + "…"
+        amt = float(ob.get("amount") or 0.0)
+        sign = "+" if ob.get("is_income") else ""
+        amt_str = f"{sign}${amt:,.2f}"
+        cat = str(ob.get("category") or "general").replace("_", " ").title()
+        rows.append([due, name, amt_str, cat])
+
+    return format_ascii_table(
+        headers=headers,
+        rows=rows,
+        col_widths=[10, 24, 12, 14],
+        right_align=[False, False, True, False],
+    )
+
+
 def format_insights_block(insights: list[str], title: str = "Executive Takeaways") -> str:
     """Render bulleted strategic insights and recommended next steps."""
     if not insights:
