@@ -26,6 +26,7 @@ from telegram.ext import (
 from agent.runner import AgentRunner
 from bot.handlers import (
     balances_command,
+    briefing_command,
     callback_query_handler,
     deep_analysis_command,
     error_handler,
@@ -136,6 +137,7 @@ def build_bot_application(
     app.add_handler(CommandHandler("spending", spending_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("status", status_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("sync", sync_command, filters=whitelist_filter))
+    app.add_handler(CommandHandler("briefing", briefing_command, filters=whitelist_filter))
     app.add_handler(CommandHandler(["deep", "audit", "solve"], deep_analysis_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("ux", ux_command, filters=whitelist_filter))
     app.add_handler(CallbackQueryHandler(callback_query_handler))
@@ -186,6 +188,7 @@ async def post_init(application: Application) -> None:
             BotCommand("deep", "Deep reasoning simulation & projections"),
             BotCommand("sync", "Force sync with Monarch Money"),
             BotCommand("status", "System & connector health status"),
+            BotCommand("briefing", "On-demand executive morning briefing"),
             BotCommand("ux", "UX Presentation Studio & layout feedback"),
         ]
         await application.bot.set_my_commands(commands)

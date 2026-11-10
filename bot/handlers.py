@@ -65,6 +65,10 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📊 Recent Spending", callback_data="cmd_spending"),
         ],
         [
+            InlineKeyboardButton("🌅 Executive Briefing", callback_data="cmd_briefing"),
+            InlineKeyboardButton("🎨 UX Studio", callback_data="ux_menu_main"),
+        ],
+        [
             InlineKeyboardButton("⚡ Stream Alerts", callback_data="cmd_sync"),
             InlineKeyboardButton("🤖 System Status", callback_data="cmd_status"),
         ],
@@ -195,10 +199,24 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="Markdown",
                 reply_markup=get_ux_feedback_keyboard(context_tag="spending"),
             )
+    elif data == "cmd_briefing":
+        from bot.jobs import send_daily_executive_briefing
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        await send_daily_executive_briefing(context, target_chat_id=chat_id)
     elif data == "cmd_sync":
         await sync_command(update, context)
     elif data == "cmd_status":
         await status_command(update, context)
+
+
+@authorized_only
+async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /briefing command: delivers an on-demand executive morning briefing."""
+    if update.effective_chat:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+    from bot.jobs import send_daily_executive_briefing
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    await send_daily_executive_briefing(context, target_chat_id=chat_id)
 
 
 @authorized_only
@@ -361,7 +379,11 @@ async def photo_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
             user_caption=caption,
         )
 
-        await _safe_reply_markdown(update.effective_message, analysis_result)
+        await _safe_reply_markdown(
+            update.effective_message,
+            analysis_result,
+            reply_markup=get_ux_feedback_keyboard(context_tag="photo"),
+        )
     except Exception as exc:
         logger.exception("Error processing inbound photo from user %s: %s", user_id, exc)
         await _safe_reply_markdown(
