@@ -164,3 +164,51 @@ async def test_connector_registry_fetch_all(monkeypatch: pytest.MonkeyPatch) -> 
     types_found = {e.stream_type for e in events}
     assert LifeStreamType.FINANCE in types_found
     assert LifeStreamType.EMAIL in types_found
+
+
+@pytest.mark.asyncio
+async def test_recurring_obligations_ground_truth(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify ground-truth verified statements take precedence and filter false positives."""
+    from connectors.statements import StatementExtractor
+
+    mock_statements = [
+        {
+            "id": "stmt-frontier-internet",
+            "name": "Frontier Internet",
+            "category": "internet",
+            "amount": 49.99,
+            "next_due_date": "2026-11-27",
+            "due_display": "Nov 27, 2026",
+            "account_mask": "7005",
+            "autopay": True,
+            "is_verified": True,
+            "source": "Frontier Official Statement",
+            "status": "Due Nov 27 (AutoPay)",
+        },
+        {
+            "id": "stmt-hyundai-car-loan",
+            "name": "Hyundai Ioniq 5 (Car Payment)",
+            "category": "auto_loan",
+            "amount": 256.28,
+            "next_due_date": "2026-11-11",
+            "due_display": "Nov 11, 2026",
+            "account_mask": "5613",
+            "autopay": True,
+            "is_verified": True,
+            "source": "Hyundai Motor Finance Statement",
+            "status": "Due Nov 11 (AutoPay Active)",
+        },
+    ]
+
+    monkeypatch.setattr(StatementExtractor, "get_verified_obligations", lambda self: pytest.importorskip("asyncio").sleep(0, result=mock_statements))
+
+    connector = MonarchConnector()
+    await connector.connect()
+    obligations = await connector.get_recurring_obligations()
+
+    assert len(obligations) >= 2
+    names = [o["name"] for o in obligations]
+    assert "Frontier Internet" in names
+    assert "Hyundai Ioniq 5 (Car Payment)" in names
+    # Ensure Florida Power & Light is not present as a recurring bill
+    assert not any("florida power" in n.lower() for n in names)

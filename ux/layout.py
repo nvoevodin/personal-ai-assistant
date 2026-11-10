@@ -128,7 +128,7 @@ def format_obligations_table(obligations: list[dict[str, Any]]) -> str:
     if not obligations:
         return "_No upcoming payment obligations scheduled._"
 
-    headers = ["Due Date", "Obligation", "Amount", "Category"]
+    headers = ["Due Date", "Obligation", "Amount", "Status"]
     rows = []
     for ob in obligations:
         due = str(ob.get("next_due_date") or "Scheduled")
@@ -140,18 +140,37 @@ def format_obligations_table(obligations: list[dict[str, Any]]) -> str:
             except Exception:
                 pass
         name = str(ob.get("name") or "Bill")
-        if len(name) > 22:
-            name = name[:21] + "…"
+        if len(name) > 23:
+            name = name[:22] + "…"
         amt = float(ob.get("amount") or 0.0)
-        sign = "+" if ob.get("is_income") else ""
-        amt_str = f"{sign}${amt:,.2f}"
-        cat = str(ob.get("category") or "general").replace("_", " ").title()
-        rows.append([due, name, amt_str, cat])
+
+        if ob.get("category") == "insurance" and "paid in full" in str(ob.get("status", "")).lower():
+            amt_str = "Paid in Full"
+        elif amt == 0.0 and "no payment" in str(ob.get("status", "")).lower():
+            amt_str = "$0.00"
+        else:
+            sign = "+" if ob.get("is_income") else ""
+            amt_str = f"{sign}${amt:,.2f}"
+
+        # Clean short status
+        raw_status = str(ob.get("status") or "")
+        if "paid in full" in raw_status.lower() and "apr" in raw_status.lower():
+            status_str = "Paid (Renews Apr)"
+        elif "autopay" in raw_status.lower() and ob.get("is_verified"):
+            status_str = "Verified (AutoPay)"
+        elif ob.get("is_verified"):
+            status_str = "Verified Statement"
+        elif ob.get("is_income"):
+            status_str = "Payroll Deposit"
+        else:
+            status_str = f"Stream ({ob.get('frequency', 'monthly')})"
+
+        rows.append([due, name, amt_str, status_str])
 
     return format_ascii_table(
         headers=headers,
         rows=rows,
-        col_widths=[10, 24, 12, 14],
+        col_widths=[9, 23, 13, 20],
         right_align=[False, False, True, False],
     )
 

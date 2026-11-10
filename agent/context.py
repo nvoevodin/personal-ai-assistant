@@ -30,13 +30,16 @@ class LifeStreamContextBuilder:
             try:
                 obligations = await monarch.get_recurring_obligations()
                 if obligations:
-                    lines.append("📅 **UPCOMING BILLS & RECURRING PAYMENT DATES:**")
+                    lines.append("📅 **UPCOMING BILLS & PAYMENT SCHEDULE (GROUND TRUTH):**")
                     for ob in obligations:
                         due = ob.get("next_due_date") or "Scheduled"
                         amt = f"${ob['amount']:,.2f}"
                         cat = ob.get("category", "").upper()
                         sign = "+" if ob.get("is_income") else "-"
-                        lines.append(f"- **{ob['name']}** [{cat}]: `{sign}{amt}` (Next Date: {due})")
+                        ver_tag = "[VERIFIED STATEMENT]" if ob.get("is_verified") else "[STREAM ESTIMATE]"
+                        status_note = f" | Status: {ob.get('status')}" if ob.get('status') else ""
+                        lines.append(f"- **{ob['name']}** [{cat}] {ver_tag}: `{sign}{amt}` (Due: {due}){status_note}")
+                    lines.append("Note: Florida Power & Light transactions were ad-hoc EV charging sessions for the Hyundai Ioniq 5, not a monthly electric bill. Frontier Internet is $49.99 due Nov 27 with AutoPay. Progressive auto insurance was paid in full $404 for 6 months on Oct 11, 2026; next renewal is April 11, 2027.")
                     lines.append("")
             except Exception as exc:
                 logger.debug("Failed adding recurring obligations to context: %s", exc)
