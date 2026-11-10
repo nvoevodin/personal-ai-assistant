@@ -48,14 +48,26 @@ class LifeStreamContextBuilder:
         if monarch and hasattr(monarch, "get_accounts"):
             try:
                 accounts = await monarch.get_accounts()
-                credit_cards = [a for a in accounts if a.type == "credit"]
-                cash_accounts = [a for a in accounts if a.type in {"checking", "savings", "depository"}]
-                if credit_cards or cash_accounts:
-                    lines.append("💳 **CREDIT CARDS & CASH LIQUIDITY:**")
-                    for c in credit_cards:
-                        lines.append(f"- Credit Card: **{c.name}** ({c.mask}) | Current Balance: `-${abs(c.balance):,.2f}`")
-                    for k in cash_accounts:
-                        lines.append(f"- Cash: **{k.name}** ({k.mask}) | Available: `${k.balance:,.2f}`")
+                credit_cards = [a for a in accounts if "credit" in a.type.lower()]
+                cash_accounts = [a for a in accounts if any(k in a.type.lower() for k in ["cash", "checking", "savings", "depository"])]
+                invest_accounts = [a for a in accounts if any(k in a.type.lower() for k in ["brokerage", "invest", "ira", "401k"])]
+
+                if cash_accounts or credit_cards:
+                    lines.append("💳 **LIQUIDITY & ACCOUNT BALANCES (MONARCH MONEY):**")
+                    if cash_accounts:
+                        lines.append("  *Cash & Checking Accounts:*")
+                        for k in cash_accounts:
+                            lines.append(f"  - **{k.name}** ({k.mask}): `${k.balance:,.2f}` available")
+                    if credit_cards:
+                        lines.append("  *Credit Card Balances & Liabilities:*")
+                        for c in credit_cards:
+                            sign_str = "-" if c.balance < 0 else "+"
+                            lines.append(f"  - **{c.name}** ({c.mask}): `{sign_str}${abs(c.balance):,.2f}` current balance")
+                    if invest_accounts:
+                        lines.append("  *Brokerage & Retirement:*")
+                        for inv in invest_accounts:
+                            if inv.balance > 0:
+                                lines.append(f"  - **{inv.name}** ({inv.mask}): `${inv.balance:,.2f}`")
                     lines.append("")
             except Exception as exc:
                 logger.debug("Failed adding account balances to context: %s", exc)

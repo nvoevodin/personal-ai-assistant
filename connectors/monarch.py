@@ -110,14 +110,29 @@ class MonarchConnector(BaseConnector):
                 accounts: list[MonarchAccount] = []
                 for raw in raw_accounts:
                     type_info = raw.get("type") or {}
-                    type_name = type_info.get("display") or type_info.get("name") or "other"
+                    raw_type = (type_info.get("name") or type_info.get("display") or "other").lower()
+                    if "credit" in raw_type:
+                        normalized_type = "credit"
+                    elif any(c in raw_type for c in ["cash", "checking", "savings", "depository"]):
+                        normalized_type = "checking"
+                    elif any(i in raw_type for i in ["investment", "brokerage", "ira", "401k"]):
+                        normalized_type = "brokerage"
+                    else:
+                        normalized_type = raw_type
+
+                    inst_info = raw.get("institution") or {}
+                    inst_name = inst_info.get("name") if isinstance(inst_info, dict) else str(inst_info or "")
+                    disp_name = str(raw.get("displayName") or "Account")
+                    if inst_name and inst_name.lower() not in disp_name.lower() and disp_name.upper().startswith("CREDIT CARD"):
+                        disp_name = f"{inst_name} {disp_name}"
+
                     raw_mask = raw.get("mask") or "****"
                     mask = raw_mask if raw_mask.startswith("*") else f"****{raw_mask[-4:]}"
                     accounts.append(
                         MonarchAccount(
                             account_id=str(raw.get("id")),
-                            name=str(raw.get("displayName") or "Account"),
-                            type=type_name.lower(),
+                            name=disp_name,
+                            type=normalized_type,
                             balance=float(raw.get("currentBalance") or 0.0),
                             mask=mask,
                             updated_at=datetime.now(timezone.utc),
