@@ -1,5 +1,6 @@
 """High-fidelity Telegram response formatting and visual hierarchy engine."""
 
+from datetime import datetime, timezone
 from typing import Any
 from ux.styles import UXStylePreset, get_style_config
 
@@ -130,13 +131,35 @@ def format_obligations_table(obligations: list[dict[str, Any]]) -> str:
 
     headers = ["Due Date", "Obligation", "Amount", "Status"]
     rows = []
+    today_dt = datetime.now(timezone.utc).date()
+
     for ob in obligations:
         due = str(ob.get("next_due_date") or "Scheduled")
         if len(due) == 10 and "-" in due:
             try:
                 parts = due.split("-")
                 month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-                due = f"{month_names[int(parts[1])]} {int(parts[2]):02d}"
+                m_str = month_names[int(parts[1])]
+                d_str = f"{int(parts[2]):02d}"
+
+                due_dt = datetime(int(parts[0]), int(parts[1]), int(parts[2])).date()
+                diff = (due_dt - today_dt).days
+
+                relative_tag = ""
+                if diff == 0:
+                    relative_tag = " (Today)"
+                elif diff == 1:
+                    relative_tag = " (Tmrw)"
+                elif diff == -1:
+                    relative_tag = " (Yest)"
+                elif -7 <= diff < 0:
+                    relative_tag = " (Past)"
+                elif 2 <= diff <= 14:
+                    relative_tag = f" (in {diff}d)"
+                elif int(parts[0]) > today_dt.year:
+                    relative_tag = f" ({parts[0]})"
+
+                due = f"{m_str} {d_str}{relative_tag}"
             except Exception:
                 pass
         name = str(ob.get("name") or "Bill")
@@ -170,7 +193,7 @@ def format_obligations_table(obligations: list[dict[str, Any]]) -> str:
     return format_ascii_table(
         headers=headers,
         rows=rows,
-        col_widths=[9, 23, 13, 20],
+        col_widths=[15, 23, 12, 18],
         right_align=[False, False, True, False],
     )
 

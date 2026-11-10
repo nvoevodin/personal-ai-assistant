@@ -45,10 +45,64 @@ async def poll_and_triage_streams(context: ContextTypes.DEFAULT_TYPE) -> None:
                     amount=float(ob.get("amount", 0.0)),
                     frequency=ob.get("frequency", "monthly"),
                     next_due_date=ob.get("next_due_date"),
+                    autopay=bool(ob.get("autopay", False)),
                     notes=ob.get("notes"),
                 )
         except Exception as ob_err:
             logger.debug("Failed updating recurring obligations in background poll: %s", ob_err)
+
+    # Proactive alert check: notify user for payment obligations due within 48 hours
+    if runner.db:
+        try:
+            today_date = datetime.datetime.now(datetime.timezone.utc).date()
+            upcoming_obs = await runner.db.get_upcoming_payment_obligations(limit=15)
+            for ob in upcoming_obs:
+                due_str = ob.get("next_due_date")
+                if not due_str or len(due_str) < 10 or ob.get("is_income"):
+                    continue
+                try:
+                    due_date = datetime.date.fromisoformat(due_str[:10])
+                    diff_days = (due_date - today_date).days
+                except Exception:
+                    continue
+
+                if 0 <= diff_days <= 1:
+                    alert_id = f"bill-reminder-{ob['id']}-{due_str[:10]}"
+                    if not await runner.db.is_event_processed(alert_id):
+                        timing = "Today" if diff_days == 0 else "Tomorrow"
+                        autopay_str = "AutoPay is scheduled" if ob.get("autopay") else "Action required: Manual payment"
+                        alert_msg = (
+                            f"🎩 📅 **Executive Bill Reminder**\n\n"
+                            f"Your **{ob['name']}** payment is due **{timing}** ({due_str[:10]}).\n\n"
+                            f"```text\n"
+                            f"Obligation: {ob['name']}\n"
+                            f"Amount:     ${float(ob.get('amount') or 0):,.2f}\n"
+                            f"Due Date:   {due_str[:10]} ({timing})\n"
+                            f"Status:     {autopay_str}\n"
+                            f"```\n"
+                            f"{'_Ensure sufficient checking balance is available._' if ob.get('autopay') else '_Please submit payment to avoid late fees._'}"
+                        )
+                        await runner.db.mark_event_processed(
+                            event_id=alert_id,
+                            source="billing_reminder",
+                            title=f"{ob['name']} due {timing}",
+                            summary=alert_msg,
+                            category="finance",
+                            urgency="high",
+                            notified=True,
+                        )
+                        for uid in settings.allowed_telegram_user_ids:
+                            try:
+                                await context.bot.send_message(
+                                    chat_id=uid,
+                                    text=alert_msg,
+                                    parse_mode="Markdown",
+                                )
+                                logger.info("Delivered proactive bill reminder for [%s] to user %s", ob['name'], uid)
+                            except Exception as snd_err:
+                                logger.error("Failed sending proactive bill reminder: %s", snd_err)
+        except Exception as check_err:
+            logger.debug("Failed checking imminent bills for proactive reminder: %s", check_err)
 
     for ev in events:
         try:

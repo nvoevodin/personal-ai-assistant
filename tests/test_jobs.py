@@ -117,3 +117,50 @@ async def test_poll_and_triage_streams_sends_alert_on_high_urgency(tmp_path):
 
     # Verify marked as processed in DB
     assert await db.is_event_processed("ev-new-urgent") is True
+
+
+@pytest.mark.asyncio
+async def test_poll_and_triage_streams_sends_proactive_bill_reminder(tmp_path):
+    """Verify that an obligation due tomorrow triggers a proactive alert."""
+    import datetime
+    db_file = tmp_path / "test_jobs_bill.db"
+    db = DatabaseManager(db_path=str(db_file))
+
+    tomorrow = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    await db.upsert_payment_obligation(
+        obligation_id="stmt-hyundai-car-loan",
+        name="Hyundai Ioniq 5 (Car Payment)",
+        category="auto_loan",
+        amount=256.28,
+        frequency="monthly",
+        next_due_date=tomorrow,
+        autopay=True,
+    )
+
+    registry_mock = MagicMock()
+    registry_mock.fetch_all_events = AsyncMock(return_value=[])
+    registry_mock.get.return_value = None
+
+    runner_mock = MagicMock()
+    runner_mock.db = db
+    runner_mock.dispatcher = None
+
+    settings_mock = MagicMock()
+    settings_mock.allowed_telegram_user_ids = [1116928631]
+
+    context = MagicMock()
+    context.bot_data = {
+        "agent_runner": runner_mock,
+        "connector_registry": registry_mock,
+        "settings": settings_mock,
+    }
+    context.bot.send_message = AsyncMock()
+
+    await poll_and_triage_streams(context)
+
+    context.bot.send_message.assert_awaited_once()
+    call_args = context.bot.send_message.call_args.kwargs
+    assert call_args["chat_id"] == 1116928631
+    assert "Executive Bill Reminder" in call_args["text"]
+    assert "Hyundai Ioniq 5" in call_args["text"]
+    assert "Tomorrow" in call_args["text"]
