@@ -171,7 +171,8 @@ async def test_evaluate_background_event_noise_gatekeeper(mock_openai_client: Ma
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "gpt-6-luna"
     assert call_kwargs["response_format"] == {"type": "json_object"}
-    assert call_kwargs["temperature"] == 0.0
+    # Reasoning models (gpt-6-luna) omit custom temperature to prevent 400 rejection
+    assert "temperature" not in call_kwargs
 
 
 @pytest.mark.asyncio

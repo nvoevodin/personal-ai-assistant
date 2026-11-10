@@ -128,6 +128,12 @@ class ModelDispatcher:
         return ModelTier.TIER_2
 
     @staticmethod
+    def _is_reasoning_model(model_name: str) -> bool:
+        """Return True if model is a reasoning-class model enforcing default temperature."""
+        lowered = model_name.lower()
+        return any(lowered.startswith(prefix) for prefix in ("gpt-6", "o1", "o3", "o4"))
+
+    @staticmethod
     def trim_conversation_history(
         conversation_history: list[dict[str, str]] | None,
         max_turns: int = 10,
@@ -190,23 +196,25 @@ class ModelDispatcher:
         messages.append({"role": "user", "content": user_message})
 
         # 2. Configure Tier-specific execution styles
+        is_reasoning = self._is_reasoning_model(model)
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
         }
 
         if tier == ModelTier.TIER_1:
-            # Deterministic, zero-temperature extraction
-            kwargs["temperature"] = 0.0 if temperature is None else temperature
+            # Deterministic extraction
+            if not is_reasoning:
+                kwargs["temperature"] = 0.0 if temperature is None else temperature
         elif tier == ModelTier.TIER_2:
             # Fast conversational, minimal reasoning tokens to reduce latency
-            kwargs["temperature"] = 0.3 if temperature is None else temperature
-            # For models supporting reasoning_effort (e.g. o3-mini or future 6.1 series)
+            if not is_reasoning:
+                kwargs["temperature"] = 0.3 if temperature is None else temperature
             kwargs["reasoning_effort"] = "low"
         elif tier == ModelTier.TIER_3:
             # Frontier deep reasoning
             kwargs["reasoning_effort"] = "high"
-            if temperature is not None:
+            if temperature is not None and not is_reasoning:
                 kwargs["temperature"] = temperature
 
         if tools:
@@ -215,7 +223,23 @@ class ModelDispatcher:
         # 3. Call OpenAI API with error handling and cost telemetry
         try:
             logger.info("Dispatching query to %s [%s] (history len: %d)", tier.value, model, len(trimmed_history))
-            response = await self.client.chat.completions.create(**kwargs)
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+            except openai.BadRequestError as bad_req:
+                err_msg = str(bad_req).lower()
+                retried = False
+                if "temperature" in err_msg and "temperature" in kwargs:
+                    logger.warning("Model %s rejected temperature; retrying with model default", model)
+                    kwargs.pop("temperature", None)
+                    retried = True
+                if "reasoning_effort" in err_msg and "reasoning_effort" in kwargs:
+                    logger.warning("Model %s rejected reasoning_effort; retrying without it", model)
+                    kwargs.pop("reasoning_effort", None)
+                    retried = True
+                if retried:
+                    response = await self.client.chat.completions.create(**kwargs)
+                else:
+                    raise
 
             choice = response.choices[0]
             content = choice.message.content or ""
@@ -307,15 +331,25 @@ class ModelDispatcher:
 
         try:
             logger.info("Evaluating background event with Tier 1 [%s]...", model)
-            response = await self.client.chat.completions.create(
-                model=model,
-                messages=[
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Event to triage:\n{event_text}"},
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.0,
-            )
+                "response_format": {"type": "json_object"},
+            }
+            if not self._is_reasoning_model(model):
+                kwargs["temperature"] = 0.0
+
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+            except openai.BadRequestError as bad_req:
+                if "temperature" in str(bad_req).lower() and "temperature" in kwargs:
+                    kwargs.pop("temperature", None)
+                    response = await self.client.chat.completions.create(**kwargs)
+                else:
+                    raise
 
             raw_json = response.choices[0].message.content or "{}"
             data = json.loads(raw_json)
@@ -358,15 +392,26 @@ class ModelDispatcher:
             "date (YYYY-MM-DD or null), category (str), currency (default USD)."
         )
         try:
-            response = await self.client.chat.completions.create(
-                model=model,
-                messages=[
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": raw_text},
                 ],
-                response_format={"type": "json_object"},
-                temperature=0.0,
-            )
+                "response_format": {"type": "json_object"},
+            }
+            if not self._is_reasoning_model(model):
+                kwargs["temperature"] = 0.0
+
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+            except openai.BadRequestError as bad_req:
+                if "temperature" in str(bad_req).lower() and "temperature" in kwargs:
+                    kwargs.pop("temperature", None)
+                    response = await self.client.chat.completions.create(**kwargs)
+                else:
+                    raise
+
             raw = response.choices[0].message.content or "{}"
             return json.loads(raw)
         except Exception as exc:

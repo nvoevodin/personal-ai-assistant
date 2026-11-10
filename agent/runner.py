@@ -110,11 +110,32 @@ class AgentRunner:
             f"### Current User Message:\n{query}"
         )
 
-        response_text, _ = await self.gemini_client.generate_with_tools(
-            prompt=augmented_prompt,
-            tools=self.tools,
-            system_instruction=SYSTEM_INSTRUCTION,
-        )
+        history_payload = [
+            {"role": m["role"], "content": m["content"]}
+            for m in recent_messages
+        ]
+
+        response_text = ""
+        # 1. Prefer OpenAI Tier 2 Workhorse (gpt-6.1-terra) if key is active
+        if self.dispatcher and self.dispatcher._settings.openai_api_key_value:
+            try:
+                res = await self.dispatcher.dispatch_query(
+                    user_message=augmented_prompt,
+                    conversation_history=history_payload,
+                    tier_override=ModelTier.TIER_2,
+                    system_instruction=SYSTEM_INSTRUCTION,
+                )
+                response_text = res.content
+            except Exception as exc:
+                logger.warning("OpenAI Tier 2 dispatch failed (%s); falling back to Gemini", exc)
+
+        # 2. Fallback to Gemini if Tier 2 didn't respond
+        if not response_text:
+            response_text, _ = await self.gemini_client.generate_with_tools(
+                prompt=augmented_prompt,
+                tools=self.tools,
+                system_instruction=SYSTEM_INSTRUCTION,
+            )
 
         # Save turns to database
         try:
