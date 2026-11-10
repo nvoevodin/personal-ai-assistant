@@ -72,6 +72,46 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_receipts_merchant
                 ON receipts (user_id, merchant);
             """)
+
+            # 3. Processed stream events table for noise triage & deduplication
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processed_events (
+                    event_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    urgency TEXT NOT NULL,
+                    notified INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_processed_events_date
+                ON processed_events (created_at DESC);
+            """)
+
+            # 4. UX Feedback and Presentation iteration table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ux_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    rating TEXT NOT NULL CHECK(rating IN ('positive', 'negative', 'restyle')),
+                    note TEXT DEFAULT '',
+                    message_snippet TEXT DEFAULT '',
+                    style_preset TEXT DEFAULT 'executive',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+            # 5. User preferences table (UX style, layout mode)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    user_id INTEGER PRIMARY KEY,
+                    ux_style TEXT NOT NULL DEFAULT 'executive',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
             conn.commit()
 
     async def save_message(self, user_id: int, role: str, content: str) -> None:
@@ -216,3 +256,111 @@ class DatabaseManager:
                 "receipt_count": receipt_count,
                 "categories": category_breakdown,
             }
+
+    async def is_event_processed(self, event_id: str) -> bool:
+        """Check if an incoming life stream event has already been triaged."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM processed_events WHERE event_id = ? LIMIT 1;",
+                (event_id,),
+            )
+            return cursor.fetchone() is not None
+
+    async def mark_event_processed(
+        self,
+        event_id: str,
+        source: str,
+        title: str,
+        summary: str,
+        category: str = "general",
+        urgency: str = "low",
+        notified: bool = False,
+    ) -> None:
+        """Persist a triaged background event to prevent duplicate alerts."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO processed_events (
+                    event_id, source, title, summary, category, urgency, notified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    event_id,
+                    source,
+                    title,
+                    summary,
+                    category,
+                    urgency,
+                    1 if notified else 0,
+                ),
+            )
+            conn.commit()
+
+    async def save_ux_feedback(
+        self,
+        user_id: int,
+        rating: str,
+        note: str = "",
+        message_snippet: str = "",
+        style_preset: str = "executive",
+    ) -> int:
+        """Persist a UX rating or critique for iterative prompt & layout improvement."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO ux_feedback (user_id, rating, note, message_snippet, style_preset)
+                VALUES (?, ?, ?, ?, ?);
+                """,
+                (user_id, rating, note, message_snippet[:300], style_preset),
+            )
+            conn.commit()
+            return cursor.lastrowid or 0
+
+    async def get_ux_feedback_stats(self) -> dict[str, Any]:
+        """Aggregate feedback ratings to guide presentation self-improvement."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT rating, COUNT(*) as cnt
+                FROM ux_feedback
+                GROUP BY rating;
+            """)
+            counts = {row["rating"]: row["cnt"] for row in cursor.fetchall()}
+            cursor.execute("""
+                SELECT id, user_id, rating, note, message_snippet, created_at
+                FROM ux_feedback
+                ORDER BY id DESC
+                LIMIT 5;
+            """)
+            recent = [dict(row) for row in cursor.fetchall()]
+            return {"counts": counts, "recent": recent}
+
+    async def set_user_ux_style(self, user_id: int, style: str) -> None:
+        """Set user's preferred UX presentation style."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO user_preferences (user_id, ux_style, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    ux_style = excluded.ux_style,
+                    updated_at = CURRENT_TIMESTAMP;
+                """,
+                (user_id, style),
+            )
+            conn.commit()
+
+    async def get_user_ux_style(self, user_id: int) -> str:
+        """Retrieve user's active UX presentation style (defaults to 'executive')."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT ux_style FROM user_preferences WHERE user_id = ? LIMIT 1;",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            return row["ux_style"] if row else "executive"

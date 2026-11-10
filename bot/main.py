@@ -35,6 +35,7 @@ from bot.handlers import (
     status_command,
     sync_command,
     text_message_handler,
+    ux_command,
 )
 from bot.security import UserWhitelistFilter
 from connectors.base import ConnectorRegistry
@@ -131,6 +132,7 @@ def build_bot_application(
     app.add_handler(CommandHandler("status", status_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("sync", sync_command, filters=whitelist_filter))
     app.add_handler(CommandHandler(["deep", "audit", "solve"], deep_analysis_command, filters=whitelist_filter))
+    app.add_handler(CommandHandler("ux", ux_command, filters=whitelist_filter))
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
     # 6. Register Authorized Message Handlers
@@ -179,11 +181,30 @@ async def post_init(application: Application) -> None:
             BotCommand("deep", "Deep reasoning simulation & projections"),
             BotCommand("sync", "Force sync with Monarch Money"),
             BotCommand("status", "System & connector health status"),
+            BotCommand("ux", "UX Presentation Studio & layout feedback"),
         ]
         await application.bot.set_my_commands(commands)
         logger.info("Configured Telegram native menu commands.")
     except Exception as exc:
         logger.warning("Could not set bot menu commands: %s", exc)
+
+    # Schedule recurring background stream triage & daily executive briefings
+    if application.job_queue:
+        from datetime import time
+        from bot.jobs import poll_and_triage_streams, send_daily_executive_briefing
+
+        application.job_queue.run_repeating(
+            poll_and_triage_streams,
+            interval=600,
+            first=30,
+            name="stream_triage_job",
+        )
+        application.job_queue.run_daily(
+            send_daily_executive_briefing,
+            time=time(hour=8, minute=0),
+            name="daily_briefing_job",
+        )
+        logger.info("Configured APScheduler recurring stream triage and daily 08:00 AM briefing.")
 
 
 def main() -> None:

@@ -13,6 +13,7 @@ from core.dispatcher import ModelDispatcher, ModelTier
 from core.gemini import GeminiClient
 from core.rate_limit import RateLimiter
 from storage.db import DatabaseManager
+from ux.prompts import build_system_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,9 @@ class AgentRunner:
 
         # Fetch recent conversational memory for multi-turn coherence
         recent_messages = await self.db.get_recent_messages(user_id=user_id, limit=6)
+        user_style = await self.db.get_user_ux_style(user_id)
+        system_inst = build_system_instruction(user_style)
+
         history_block = ""
         if recent_messages:
             history_lines = [
@@ -123,7 +127,7 @@ class AgentRunner:
                     user_message=augmented_prompt,
                     conversation_history=history_payload,
                     tier_override=ModelTier.TIER_2,
-                    system_instruction=SYSTEM_INSTRUCTION,
+                    system_instruction=system_inst,
                 )
                 response_text = res.content
             except Exception as exc:
@@ -134,7 +138,7 @@ class AgentRunner:
             response_text, _ = await self.gemini_client.generate_with_tools(
                 prompt=augmented_prompt,
                 tools=self.tools,
-                system_instruction=SYSTEM_INSTRUCTION,
+                system_instruction=system_inst,
             )
 
         # Save turns to database
@@ -156,6 +160,9 @@ class AgentRunner:
             {"role": m["role"], "content": m["content"]}
             for m in recent_messages
         ]
+        user_style = await self.db.get_user_ux_style(user_id)
+        # Deep analysis emphasizes analytical depth
+        system_inst = build_system_instruction("analytical" if user_style != "minimalist" else "minimalist")
 
         if self.dispatcher and self.dispatcher._settings.openai_api_key_value:
             augmented_query = f"{stream_context}\n\n### Analytical Directive:\n{query}"
@@ -163,7 +170,7 @@ class AgentRunner:
                 user_message=augmented_query,
                 conversation_history=history_payload,
                 tier_override=ModelTier.TIER_3,
-                system_instruction=SYSTEM_INSTRUCTION,
+                system_instruction=system_inst,
             )
             response_text = f"🧠 **[Tier 3: {res.model}]**\n\n{res.content}\n\n_Tokens: {res.total_tokens} | Est: ${res.estimated_cost_usd:.4f}_"
         else:
@@ -171,7 +178,7 @@ class AgentRunner:
             response_text, _ = await self.gemini_client.generate_with_tools(
                 prompt=augmented_query,
                 tools=self.tools,
-                system_instruction=SYSTEM_INSTRUCTION,
+                system_instruction=system_inst,
             )
 
         try:

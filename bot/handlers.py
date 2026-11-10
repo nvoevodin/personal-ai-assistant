@@ -10,21 +10,30 @@ from agent.runner import AgentRunner
 from bot.security import authorized_only
 from connectors.base import ConnectorRegistry
 from core.config import get_settings
+from ux import (
+    format_financial_accounts,
+    format_header,
+    format_transactions_card,
+    get_ux_feedback_keyboard,
+    handle_ux_callback,
+    ux_command,
+)
 
 logger = logging.getLogger(__name__)
 
 
-async def _safe_reply_markdown(message: Any, text: str) -> None:
+async def _safe_reply_markdown(message: Any, text: str, reply_markup: Any = None) -> None:
     """Send markdown-formatted message, falling back to plain text if formatting is invalid."""
     if not message:
         return
     chunks = [text[i:i + 4000] for i in range(0, len(text), 4000)] if len(text) > 4000 else [text]
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks):
+        markup = reply_markup if idx == len(chunks) - 1 else None
         try:
-            await message.reply_text(chunk, parse_mode="Markdown")
+            await message.reply_text(chunk, parse_mode="Markdown", reply_markup=markup)
         except Exception as exc:
             logger.warning("Markdown entity parsing failed (%s); sending plain text fallback", exc)
-            await message.reply_text(chunk)
+            await message.reply_text(chunk, reply_markup=markup)
 
 
 def _get_agent_runner(context: ContextTypes.DEFAULT_TYPE) -> AgentRunner:
@@ -45,22 +54,7 @@ def _get_connector_registry(context: ContextTypes.DEFAULT_TYPE) -> ConnectorRegi
 
 def format_financial_table(accounts: list) -> str:
     """Format accounts into a razor-sharp monospace ASCII table for Telegram."""
-    lines = ["```text"]
-    lines.append(f"{'Account':<18} {'Mask':<5} {'Balance':>13}")
-    lines.append("─" * 38)
-    total_balance = 0.0
-    for a in accounts:
-        sign = "$" if a.balance >= 0 else "-$"
-        val_str = f"{sign}{abs(a.balance):,.2f}"
-        name = (a.name[:17] + "…") if len(a.name) > 17 else a.name
-        mask = a.mask or "••••"
-        lines.append(f"{name:<18} {mask:<5} {val_str:>13}")
-        total_balance += a.balance
-    lines.append("─" * 38)
-    tot_sign = "$" if total_balance >= 0 else "-$"
-    lines.append(f"{'Total Net':<18} {'':<5} {f'{tot_sign}{abs(total_balance):,.2f}':>13}")
-    lines.append("```")
-    return "\n".join(lines)
+    return format_financial_accounts(accounts)
 
 
 def get_main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -121,9 +115,13 @@ async def balances_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     table_text = format_financial_table(accounts)
-    msg = f"🏛️ **Financial Accounts & Balances**\n\n{table_text}"
+    msg = f"{format_header('Financial Portfolio & Balances', badge='PORTFOLIO', emoji='💰')}\n\n{table_text}"
     if update.effective_message:
-        await _safe_reply_markdown(update.effective_message, msg)
+        await _safe_reply_markdown(
+            update.effective_message,
+            msg,
+            reply_markup=get_ux_feedback_keyboard(context_tag="balances"),
+        )
 
 
 @authorized_only
@@ -145,13 +143,14 @@ async def spending_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.effective_message.reply_text("No recent transactions found.")
         return
 
-    lines = ["📊 **Recent Expenditures & Transactions:**\n"]
-    for t in txs:
-        date_str = t.timestamp.strftime("%b %d")
-        lines.append(f"• `{date_str}` **{t.merchant}** ─── `${t.amount:,.2f}`\n  *Category: {t.category}*")
-
+    table_text = format_transactions_card(txs, limit=10)
+    msg = f"{format_header('Recent Expenditures & Transactions', badge='SPENDING', emoji='📊')}\n\n{table_text}"
     if update.effective_message:
-        await _safe_reply_markdown(update.effective_message, "\n".join(lines))
+        await _safe_reply_markdown(
+            update.effective_message,
+            msg,
+            reply_markup=get_ux_feedback_keyboard(context_tag="spending"),
+        )
 
 
 async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -159,6 +158,11 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if not query:
         return
+
+    # Check if this query belongs to the UX presentation & feedback system
+    if await handle_ux_callback(update, context):
+        return
+
     await query.answer()
 
     data = query.data
@@ -176,19 +180,21 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             accounts = await monarch.get_accounts()
             table_text = format_financial_table(accounts)
             await query.message.reply_text(
-                f"🏛️ **Financial Accounts & Balances**\n\n{table_text}",
+                f"{format_header('Financial Portfolio & Balances', badge='PORTFOLIO', emoji='💰')}\n\n{table_text}",
                 parse_mode="Markdown",
+                reply_markup=get_ux_feedback_keyboard(context_tag="balances"),
             )
     elif data == "cmd_spending":
         registry = _get_connector_registry(context)
         monarch = registry.get("monarch")
         if monarch:
             txs = await monarch.get_recent_transactions(limit=8)
-            lines = ["📊 **Recent Expenditures:**\n"]
-            for t in txs:
-                date_str = t.timestamp.strftime("%b %d")
-                lines.append(f"• `{date_str}` **{t.merchant}** ─── `${t.amount:,.2f}` ({t.category})")
-            await query.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            table_text = format_transactions_card(txs, limit=8)
+            await query.message.reply_text(
+                f"{format_header('Recent Expenditures', badge='SPENDING', emoji='📊')}\n\n{table_text}",
+                parse_mode="Markdown",
+                reply_markup=get_ux_feedback_keyboard(context_tag="spending"),
+            )
     elif data == "cmd_sync":
         await sync_command(update, context)
     elif data == "cmd_status":
@@ -277,7 +283,11 @@ async def deep_analysis_command(update: Update, context: ContextTypes.DEFAULT_TY
     runner = _get_agent_runner(context)
     try:
         reply_text = await runner.handle_deep_analysis(user_id=user_id, query=raw_text)
-        await _safe_reply_markdown(update.effective_message, reply_text)
+        await _safe_reply_markdown(
+            update.effective_message,
+            reply_text,
+            reply_markup=get_ux_feedback_keyboard(context_tag="deep"),
+        )
     except Exception as exc:
         logger.exception("Error processing deep analysis from user %s: %s", user_id, exc)
         await _safe_reply_markdown(
@@ -303,9 +313,16 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         if query.strip().lower().startswith(("/deep", "/audit", "/solve")):
             reply_text = await runner.handle_deep_analysis(user_id=user_id, query=query)
+            tag = "deep"
         else:
             reply_text = await runner.handle_user_query(user_id=user_id, query=query)
-        await _safe_reply_markdown(update.effective_message, reply_text)
+            tag = "chat"
+
+        await _safe_reply_markdown(
+            update.effective_message,
+            reply_text,
+            reply_markup=get_ux_feedback_keyboard(context_tag=tag),
+        )
     except Exception as exc:
         logger.exception("Error processing text query from user %s: %s", user_id, exc)
         await _safe_reply_markdown(

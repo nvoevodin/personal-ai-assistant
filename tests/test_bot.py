@@ -136,9 +136,11 @@ async def test_text_message_handler(mock_bot_context: MagicMock) -> None:
         user_id=111222333,
         query="How much did I spend yesterday?",
     )
+    from unittest.mock import ANY
     update.effective_message.reply_text.assert_awaited_once_with(
         "Agent response to test query",
         parse_mode="Markdown",
+        reply_markup=ANY,
     )
 
 
