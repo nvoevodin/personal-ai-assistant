@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timezone
 import email
+import email.message
 from email.header import decode_header
 import imaplib
 import logging
