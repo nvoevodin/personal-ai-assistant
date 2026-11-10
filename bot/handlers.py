@@ -248,6 +248,45 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 @authorized_only
+async def deep_analysis_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /deep, /audit, and /solve commands routed to Tier 3 Frontier Analyst (gpt-6.1-sol)."""
+    if not update.effective_message or not update.effective_message.text:
+        return
+
+    user = update.effective_user
+    user_id = user.id if user else 0
+    raw_text = update.effective_message.text
+
+    parts = raw_text.split(maxsplit=1)
+    prompt = parts[1] if len(parts) > 1 else ""
+    if not prompt:
+        await _safe_reply_markdown(
+            update.effective_message,
+            "🧠 **Tier 3 Frontier Analyst (`gpt-6.1-sol`)**\n\n"
+            "Please provide an analytical scenario or audit request after the command.\n\n"
+            "**Examples:**\n"
+            "• `/audit Review all my credit cards, interest risk, and debt payoff order`\n"
+            "• `/deep Simulate 12-month net worth growth assuming $2,500 monthly savings`\n"
+            "• `/solve Optimize emergency fund allocation across high-yield cash and brokerage`",
+        )
+        return
+
+    if update.effective_chat:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+    runner = _get_agent_runner(context)
+    try:
+        reply_text = await runner.handle_deep_analysis(user_id=user_id, query=raw_text)
+        await _safe_reply_markdown(update.effective_message, reply_text)
+    except Exception as exc:
+        logger.exception("Error processing deep analysis from user %s: %s", user_id, exc)
+        await _safe_reply_markdown(
+            update.effective_message,
+            f"⚠️ Deep analysis failed: {exc}",
+        )
+
+
+@authorized_only
 async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inbound user queries, routes them through AgentRunner and Gemini."""
     if not update.effective_message or not update.effective_message.text:
@@ -262,7 +301,10 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     runner = _get_agent_runner(context)
     try:
-        reply_text = await runner.handle_user_query(user_id=user_id, query=query)
+        if query.strip().lower().startswith(("/deep", "/audit", "/solve")):
+            reply_text = await runner.handle_deep_analysis(user_id=user_id, query=query)
+        else:
+            reply_text = await runner.handle_user_query(user_id=user_id, query=query)
         await _safe_reply_markdown(update.effective_message, reply_text)
     except Exception as exc:
         logger.exception("Error processing text query from user %s: %s", user_id, exc)

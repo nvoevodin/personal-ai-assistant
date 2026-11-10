@@ -30,5 +30,9 @@ class GeminiAPIError(AssistantBaseError):
     """Raised when an interaction with Google Gemini API fails."""
 
 
+class OpenAIDispatcherError(AssistantBaseError):
+    """Raised when an interaction with the OpenAI Dispatcher fails."""
+
+
 class ConnectorError(AssistantBaseError):
     """Raised when a stream connector fails to fetch or parse upstream data."""

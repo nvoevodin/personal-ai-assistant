@@ -32,6 +32,22 @@ class Settings(BaseSettings):
         default="gemini-3.8-flash",
         description="Gemini model identifier for text and multimodal OCR operations",
     )
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        description="Optional OpenAI API key for 3-tier model dispatcher",
+    )
+    openai_tier1_model: str = Field(
+        default="gpt-6-luna",
+        description="Tier 1 High-Speed Router & Noise Gatekeeper model identifier",
+    )
+    openai_tier2_model: str = Field(
+        default="gpt-6.1-terra",
+        description="Tier 2 Default Brain & Daily Workhorse model identifier",
+    )
+    openai_tier3_model: str = Field(
+        default="gpt-6.1-sol",
+        description="Tier 3 Frontier Deep Analyst model identifier",
+    )
     log_level: str = Field(
         default="INFO",
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
@@ -96,6 +112,11 @@ class Settings(BaseSettings):
     def gemini_api_key_value(self) -> str:
         """Helper to expose the raw Gemini API Key safely."""
         return self.gemini_api_key.get_secret_value()
+
+    @property
+    def openai_api_key_value(self) -> str | None:
+        """Helper to expose the raw OpenAI API Key safely."""
+        return self.openai_api_key.get_secret_value() if self.openai_api_key else None
 
     @property
     def monarch_token_value(self) -> str | None:

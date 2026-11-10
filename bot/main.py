@@ -27,6 +27,7 @@ from agent.runner import AgentRunner
 from bot.handlers import (
     balances_command,
     callback_query_handler,
+    deep_analysis_command,
     error_handler,
     photo_message_handler,
     spending_command,
@@ -129,6 +130,7 @@ def build_bot_application(
     app.add_handler(CommandHandler("spending", spending_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("status", status_command, filters=whitelist_filter))
     app.add_handler(CommandHandler("sync", sync_command, filters=whitelist_filter))
+    app.add_handler(CommandHandler(["deep", "audit", "solve"], deep_analysis_command, filters=whitelist_filter))
     app.add_handler(CallbackQueryHandler(callback_query_handler))
 
     # 6. Register Authorized Message Handlers
@@ -173,6 +175,8 @@ async def post_init(application: Application) -> None:
             BotCommand("start", "Executive Butler welcome & action menu"),
             BotCommand("balances", "Monarch net worth & account table"),
             BotCommand("spending", "Recent transactions & expenditures"),
+            BotCommand("audit", "Frontier financial audit (gpt-6.1-sol)"),
+            BotCommand("deep", "Deep reasoning simulation & projections"),
             BotCommand("sync", "Force sync with Monarch Money"),
             BotCommand("status", "System & connector health status"),
         ]

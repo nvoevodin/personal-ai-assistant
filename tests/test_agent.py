@@ -77,6 +77,46 @@ async def test_agent_runner_handle_photo(
 
 
 @pytest.mark.asyncio
+async def test_agent_runner_deep_analysis_dispatcher_routing(
+    mock_gemini_client: GeminiClient, mock_registry: ConnectorRegistry, tmp_path: pytest.TempPathFactory
+) -> None:
+    """Verify /audit or /deep commands trigger handle_deep_analysis with Tier 3 routing."""
+    from unittest.mock import AsyncMock, MagicMock
+    from storage.db import DatabaseManager
+    from core.dispatcher import ModelDispatcher, DispatchResponse, ModelTier
+
+    mock_dispatcher = MagicMock(spec=ModelDispatcher)
+    mock_dispatcher._settings = MagicMock()
+    mock_dispatcher._settings.openai_api_key_value = "sk-live-test"
+    mock_dispatcher.dispatch_query = AsyncMock(
+        return_value=DispatchResponse(
+            content="Deep financial audit complete.",
+            model="gpt-6.1-sol",
+            tier=ModelTier.TIER_3,
+            prompt_tokens=500,
+            completion_tokens=200,
+            total_tokens=700,
+            estimated_cost_usd=0.003,
+        )
+    )
+
+    test_db = DatabaseManager(db_path=str(tmp_path / "deep_test.db"))
+    runner = AgentRunner(
+        gemini_client=mock_gemini_client,
+        registry=mock_registry,
+        db=test_db,
+        dispatcher=mock_dispatcher,
+    )
+
+    reply = await runner.handle_deep_analysis(user_id=123, query="/audit analyze debt risk")
+
+    assert "gpt-6.1-sol" in reply
+    assert "Deep financial audit complete" in reply
+    mock_dispatcher.dispatch_query.assert_awaited_once()
+    assert mock_dispatcher.dispatch_query.call_args.kwargs["tier_override"] == ModelTier.TIER_3
+
+
+@pytest.mark.asyncio
 async def test_rate_limiter_throttling() -> None:
     """Verify RateLimiter permits allowed calls and throws RateLimitExceededError when exceeded."""
     limiter = RateLimiter(max_calls=2, window_seconds=60.0)

@@ -9,6 +9,7 @@ from agent.prompts import IMAGE_ANALYSIS_PROMPT, SYSTEM_INSTRUCTION
 from connectors.base import ConnectorRegistry
 from connectors.gmail import GmailConnector
 from connectors.monarch import MonarchConnector
+from core.dispatcher import ModelDispatcher, ModelTier
 from core.gemini import GeminiClient
 from core.rate_limit import RateLimiter
 from storage.db import DatabaseManager
@@ -25,12 +26,14 @@ class AgentRunner:
         registry: ConnectorRegistry,
         rate_limiter: RateLimiter | None = None,
         db: DatabaseManager | None = None,
+        dispatcher: ModelDispatcher | None = None,
     ) -> None:
         self.gemini_client = gemini_client
         self.registry = registry
         self.context_builder = LifeStreamContextBuilder(registry=registry)
         self.rate_limiter = rate_limiter or RateLimiter()
         self.db = db or DatabaseManager()
+        self.dispatcher = dispatcher or ModelDispatcher()
         self.tools = self._build_tool_suite()
 
     def _build_tool_suite(self) -> list[Callable[..., Any]]:
@@ -119,6 +122,42 @@ class AgentRunner:
             await self.db.save_message(user_id=user_id, role="assistant", content=response_text)
         except Exception as db_exc:
             logger.warning("Failed to persist conversation history: %s", db_exc)
+
+        return response_text
+
+    async def handle_deep_analysis(self, user_id: int, query: str) -> str:
+        """Route explicitly requested complex reasoning scenarios to Tier 3 Frontier Analyst (gpt-6.1-sol)."""
+        await self.rate_limiter.acquire(user_id=user_id)
+        stream_context = await self.context_builder.build_context_block(max_events=10)
+        recent_messages = await self.db.get_recent_messages(user_id=user_id, limit=6)
+
+        history_payload = [
+            {"role": m["role"], "content": m["content"]}
+            for m in recent_messages
+        ]
+
+        if self.dispatcher and self.dispatcher._settings.openai_api_key_value:
+            augmented_query = f"{stream_context}\n\n### Analytical Directive:\n{query}"
+            res = await self.dispatcher.dispatch_query(
+                user_message=augmented_query,
+                conversation_history=history_payload,
+                tier_override=ModelTier.TIER_3,
+                system_instruction=SYSTEM_INSTRUCTION,
+            )
+            response_text = f"🧠 **[Tier 3: {res.model}]**\n\n{res.content}\n\n_Tokens: {res.total_tokens} | Est: ${res.estimated_cost_usd:.4f}_"
+        else:
+            augmented_query = f"{stream_context}\n\n### In-Depth Deep Analytical Directive:\n{query}"
+            response_text, _ = await self.gemini_client.generate_with_tools(
+                prompt=augmented_query,
+                tools=self.tools,
+                system_instruction=SYSTEM_INSTRUCTION,
+            )
+
+        try:
+            await self.db.save_message(user_id=user_id, role="user", content=query)
+            await self.db.save_message(user_id=user_id, role="assistant", content=response_text)
+        except Exception as db_exc:
+            logger.warning("Failed to persist deep analysis history: %s", db_exc)
 
         return response_text
 
