@@ -100,8 +100,11 @@ async def poll_and_triage_streams(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.error("Error processing event %s during background poll: %s", getattr(ev, "id", "unknown"), item_err)
 
 
-async def send_daily_executive_briefing(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Deliver an 8:00 AM proactive executive summary of net worth and daily cash status."""
+async def send_daily_executive_briefing(
+    context: ContextTypes.DEFAULT_TYPE,
+    target_chat_id: int | None = None,
+) -> None:
+    """Deliver an executive summary of net worth and daily cash status."""
     runner: AgentRunner | None = context.bot_data.get("agent_runner")
     registry: ConnectorRegistry | None = context.bot_data.get("connector_registry")
     settings: Settings | None = context.bot_data.get("settings")
@@ -109,7 +112,7 @@ async def send_daily_executive_briefing(context: ContextTypes.DEFAULT_TYPE) -> N
     if not runner or not registry or not settings:
         return
 
-    logger.info("Generating scheduled daily executive morning briefing...")
+    logger.info("Generating executive morning briefing...")
     table_str = ""
     monarch = registry.get("monarch")
     if monarch:
@@ -153,13 +156,14 @@ async def send_daily_executive_briefing(context: ContextTypes.DEFAULT_TYPE) -> N
         "_LifeStream Assistant Online_"
     )
 
-    for user_id in settings.allowed_telegram_user_ids:
+    recipients = [target_chat_id] if target_chat_id else settings.allowed_telegram_user_ids
+    for user_id in recipients:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
                 text=full_message,
                 parse_mode="Markdown",
             )
-            logger.info("Delivered daily morning briefing to user %s", user_id)
+            logger.info("Delivered morning briefing to user %s", user_id)
         except Exception as exc:
             logger.error("Failed to send morning briefing to user %s: %s", user_id, exc)

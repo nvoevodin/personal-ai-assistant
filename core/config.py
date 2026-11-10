@@ -78,6 +78,18 @@ class Settings(BaseSettings):
         default=None,
         description="Optional Monarch Money session cookie for authenticated GraphQL calls",
     )
+    gmail_email: str | None = Field(
+        default=None,
+        description="Gmail or Google Workspace email address",
+    )
+    gmail_app_password: SecretStr | None = Field(
+        default=None,
+        description="Gmail 16-character App Password generated from Google Account Security",
+    )
+    gmail_credentials_file: str | None = Field(
+        default=None,
+        description="Path to OAuth credentials.json file for Google Workspace API",
+    )
 
     @field_validator("allowed_telegram_user_ids", mode="before")
     @classmethod
@@ -137,6 +149,11 @@ class Settings(BaseSettings):
     def monarch_cookie_value(self) -> str | None:
         """Helper to expose the raw Monarch session cookie safely."""
         return self.monarch_cookie.get_secret_value() if self.monarch_cookie else None
+
+    @property
+    def gmail_app_password_value(self) -> str | None:
+        """Helper to expose the raw Gmail app password safely."""
+        return self.gmail_app_password.get_secret_value() if self.gmail_app_password else None
 
     def is_user_allowed(self, user_id: int | None) -> bool:
         """Determine if a Telegram user ID is whitelisted."""

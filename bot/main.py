@@ -90,7 +90,12 @@ def build_bot_application(
                 mfa_secret=resolved_settings.monarch_mfa_secret_value,
             )
         )
-        registry.register(GmailConnector())
+        registry.register(
+            GmailConnector(
+                email_address=resolved_settings.gmail_email,
+                app_password=resolved_settings.gmail_app_password_value,
+            )
+        )
 
     # 2. Initialize Gemini Client & Agent Runner
     client = gemini_client or GeminiClient(

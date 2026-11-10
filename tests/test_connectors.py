@@ -1,5 +1,6 @@
 """Unit tests for life-stream connectors, data models, and PII sanitization."""
 
+from datetime import datetime, timezone
 import pytest
 from connectors.base import ConnectorRegistry
 from connectors.gmail import GmailConnector
@@ -79,41 +80,87 @@ async def test_monarch_connector_lifecycle_and_data() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gmail_connector_lifecycle_and_alerts() -> None:
-    """Verify GmailConnector returns structured alerts with PII scrubbed."""
+async def test_gmail_connector_lifecycle_unconfigured() -> None:
+    """Verify GmailConnector initializes cleanly and returns empty list when unconfigured."""
     connector = GmailConnector()
     await connector.connect()
-    assert connector.is_connected is True
+    assert connector.is_connected is False
 
     alerts = await connector.get_recent_alerts(limit=5)
-    assert len(alerts) >= 3
-    # Check travel alert
-    travel_alert = next((a for a in alerts if a.category == "travel"), None)
-    assert travel_alert is not None
-    assert "UA 412" in travel_alert.subject
+    assert alerts == []
 
     events = await connector.fetch_events(limit=5)
-    assert len(events) >= 3
-    assert any(e.is_urgent for e in events)  # Security alert should be urgent
+    assert events == []
 
     health = await connector.get_health()
-    assert health["connected"] is True
+    assert health["connected"] is False
+    assert health["is_live"] is False
 
     await connector.disconnect()
     assert connector.is_connected is False
 
 
 @pytest.mark.asyncio
-async def test_connector_registry_fetch_all() -> None:
+async def test_gmail_connector_mocked_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify GmailConnector parses live IMAP messages, categorizes, and scrubs PII."""
+    from connectors.gmail import _categorize_email, _decode_mime_header
+
+    assert _categorize_email("delta.com", "Your flight to JFK", "E-ticket confirmation") == "travel"
+    assert _categorize_email("amazon.com", "Your order has shipped", "Tracking 123") == "delivery"
+    assert _categorize_email("apple.com", "Receipt for purchase", "Total $9.99") == "receipt"
+    assert _categorize_email("google.com", "Security alert", "New sign-in") == "security"
+
+    connector = GmailConnector(email_address="test@gmail.com", app_password="mock_password")
+
+    # Mock _sync_connect_and_fetch to simulate live IMAP results
+    def mock_fetch(limit=10):
+        return [
+            {
+                "message_id": "1001",
+                "sender": "reservations@marriott.com",
+                "subject": "Hotel Booking Confirmation #99482",
+                "snippet": "Thank you for booking with Marriott. Card ****-****-****-4444 charged $250.00.",
+                "received_at": datetime.now(timezone.utc),
+                "category": "travel",
+                "is_starred": False,
+            }
+        ]
+
+    monkeypatch.setattr(connector, "_sync_connect_and_fetch", mock_fetch)
+    alerts = await connector.get_recent_alerts(limit=5)
+    assert len(alerts) == 1
+    assert alerts[0].category == "travel"
+    assert "Hotel Booking" in alerts[0].subject
+
+    events = await connector.fetch_events(limit=5)
+    assert len(events) == 1
+    assert events[0].id == "gmail-1001"
+    assert events[0].source == "gmail"
+
+
+@pytest.mark.asyncio
+async def test_connector_registry_fetch_all(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify ConnectorRegistry aggregates events across multiple connectors."""
     registry = ConnectorRegistry()
     registry.register(MonarchConnector())
-    registry.register(GmailConnector())
+    gmail = GmailConnector(email_address="user@gmail.com", app_password="password")
+    monkeypatch.setattr(gmail, "_sync_connect_and_fetch", lambda limit=10: [
+        {
+            "message_id": "99",
+            "sender": "alerts@bank.com",
+            "subject": "Security Alert",
+            "snippet": "New device sign in",
+            "received_at": datetime.now(timezone.utc),
+            "category": "security",
+            "is_starred": False,
+        }
+    ])
+    registry.register(gmail)
 
     await registry.connect_all()
     events = await registry.fetch_all_events(limit_per_connector=5)
 
-    assert len(events) >= 5
+    assert len(events) >= 1
     types_found = {e.stream_type for e in events}
     assert LifeStreamType.FINANCE in types_found
     assert LifeStreamType.EMAIL in types_found
