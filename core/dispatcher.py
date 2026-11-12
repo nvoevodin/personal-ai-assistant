@@ -15,7 +15,7 @@ from typing import Any, Callable, Literal
 
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from core.config import Settings, get_settings
 from core.errors import OpenAIDispatcherError
@@ -41,13 +41,41 @@ TIER_PRICING: dict[ModelTier, dict[str, float]] = {
 # Prefix commands that explicitly escalate execution to Tier 3 Frontier Analyst
 DEEP_COMMAND_PREFIXES = ("/deep", "/audit", "/solve")
 
+ANALYST_SYSTEM_PROMPT = """You are a sharp, skeptical personal financial & operations advisor.
+You have received a flagged life-stream event that passed initial noise filtering.
+You are given the user's current financial snapshot (account balances, checking liquidity, upcoming bills, and recent transactions).
+
+BEFORE deciding to notify the user on Telegram:
+1. INVESTIGATE & CROSS-CHECK:
+   - Check account balances, checking liquidity, recurring obligations, and recent transactions.
+   - For transfers: look at the direction (+ into account vs - out of account) and source/destination. Do not reverse transfers!
+   - For bills/payments: check whether it's an auto-pay, if checking balance covers it, or if it's already accounted for.
+   - For deliveries/statements: check if this requires actual user action or intervention.
+2. CHALLENGE & VERIFY:
+   - Is this a duplicate charge, price increase on a recurring bill, or refund discrepancy?
+   - Is checking balance sufficient for upcoming auto-pays or at risk of overdraft?
+   - Is there a smarter financial move or catch the user might miss?
+3. GATEKEEP SILENCE:
+   - If everything is normal, expected, routine, or requires zero action (e.g., routine statement availability with no balance issues, standard package transit milestones, expected recurring subscription within budget), output ONLY:
+     NO_ACTION_REQUIRED
+   - Do NOT send a generic summary if there is no actionable insight or anomaly.
+4. BE DIRECT & OPINIONATED:
+   - If you DO alert the user, write a concise, sharp executive advisory.
+   - Lead directly with the insight, anomaly, risk, or recommended action—never parrot raw email or transaction text.
+   - Format cleanly using Markdown (use bolding, bullet points, but NO markdown pipe tables; use text blocks if needed).
+"""
+
 
 class TriageResult(BaseModel):
     """Structured noise gatekeeper and triage evaluation for background stream events."""
 
     should_notify: bool = Field(
         ...,
-        description="Whether this background event warrants an immediate Telegram alert",
+        description="Whether this background event warrants an immediate Telegram alert or deeper investigation",
+    )
+    needs_investigation: bool = Field(
+        default=False,
+        description="Whether this event should be passed to Tier 2 Analyst for deep investigation before alerting",
     )
     summary: str = Field(
         ...,
@@ -61,6 +89,14 @@ class TriageResult(BaseModel):
         ...,
         description="Category classification of the event",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_needs_investigation(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "needs_investigation" not in data and "should_notify" in data:
+                data["needs_investigation"] = data["should_notify"]
+        return data
 
 
 class DispatchResponse(BaseModel):
@@ -316,13 +352,14 @@ class ModelDispatcher:
         system_prompt = (
             "You are an elite, noise-gatekeeper and triage router for an executive personal assistant.\n"
             "Analyze the provided life-stream event (financial transaction, email alert, delivery, or notification).\n"
-            "Determine if this event warrants an immediate Telegram alert to the user.\n\n"
-            "Rules for alerts:\n"
-            "- Noise, routine promotional newsletters, and mundane minor updates must have should_notify: false.\n"
-            "- Critical security warnings, unexpected high transactions, flights/travel changes, or deliveries have should_notify: true.\n"
+            "Determine if this event warrants investigation or an alert to the user.\n\n"
+            "Rules for triage:\n"
+            "- Noise, routine promotional newsletters, standard shipping milestones, and mundane minor updates must have should_notify: false, needs_investigation: false.\n"
+            "- Important financial transactions, unusual charges, security warnings, travel changes, or critical deliveries have needs_investigation: true, should_notify: true.\n"
             "- Output strictly valid JSON conforming to the schema:\n"
             "{\n"
             '  "should_notify": boolean,\n'
+            '  "needs_investigation": boolean,\n'
             '  "summary": "concise 1-2 sentence executive briefing",\n'
             '  "urgency": "low" | "medium" | "high",\n'
             '  "category": "finance" | "order_tracking" | "calendar" | "noise"\n'
@@ -382,6 +419,43 @@ class ModelDispatcher:
         """Convenience method to triage a titled notification from any life stream."""
         formatted = f"Source: {source.upper()}\nTitle: {title}\nDetails: {body}"
         return await self.evaluate_background_event(event_text=formatted)
+
+    async def investigate_and_advise(
+        self,
+        event_payload: str,
+        context_block: str = "",
+    ) -> str | None:
+        """Investigate a flagged event against live context using Tier 2 (gpt-6.1-terra).
+
+        Args:
+            event_payload: Raw event or triage payload string.
+            context_block: Live financial context (balances, upcoming obligations, transactions).
+
+        Returns:
+            Actionable advisory message string if notification is warranted, or None if
+            the event is routine and Tier 2 determined 'NO_ACTION_REQUIRED'.
+        """
+        user_message = (
+            f"FLAGGED EVENT TO INVESTIGATE:\n{event_payload}\n\n"
+            f"LIVE FINANCIAL & LIFE-STREAM CONTEXT:\n{context_block}\n\n"
+            "Evaluate whether this event requires user notification or intervention. "
+            "If normal/routine/expected, output NO_ACTION_REQUIRED. Otherwise, provide a direct executive advisory."
+        )
+        try:
+            logger.info("Escalating flagged event to Tier 2 Analyst for investigation...")
+            response = await self.dispatch_query(
+                user_message=user_message,
+                tier_override=ModelTier.TIER_2,
+                system_instruction=ANALYST_SYSTEM_PROMPT.strip(),
+            )
+            content = response.content.strip()
+            if not content or "NO_ACTION_REQUIRED" in content.upper():
+                logger.info("Tier 2 Analyst decided NO_ACTION_REQUIRED. Alert suppressed.")
+                return None
+            return content
+        except Exception as exc:
+            logger.error("Tier 2 Analyst investigation failed: %s", exc, exc_info=True)
+            return None
 
     async def extract_transaction_data(self, raw_text: str) -> dict[str, Any]:
         """Extract structured financial data from raw notes or receipts using Tier 1 (gpt-6-luna)."""

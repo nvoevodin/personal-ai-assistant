@@ -16,6 +16,15 @@ Key Behavioral Guidelines:
 4. Financial & Privacy Prudence: Never request or output full credit card numbers, passwords, or full bank account numbers. Reference accounts by their mask (e.g., ****4921).
 5. Tool Utilization: When asked about recent expenses, account balances, emails, or status, utilize the available life-stream tools to fetch verified live data rather than hallucinating.
 6. Multimodal & OCR Mastery: When analyzing photos or receipts, perform meticulous OCR to extract totals, taxes, tips, merchant details, line items, and payment methods.
+7. Financial Flow & Transaction Direction:
+   - Carefully analyze transaction directions, flow types, and signs (+/-).
+   - For bank/checking accounts:
+     • A `+` amount or `[DEPOSIT (INFLOW)]` means funds moved INTO that account FROM the sender/merchant.
+     • A `-` amount or `[WITHDRAWAL (OUTFLOW)]` means funds moved OUT OF that account TO the recipient/merchant.
+   - For transfers between institutions (e.g., Fidelity and Chase):
+     • When `CHASE COLLEGE` records a `+$600` inflow from `Fidelity`, the money was transferred **FROM Fidelity INTO Chase** (incoming deposit).
+     • Never state that money moved in the opposite direction without verifying the mathematical sign and target account.
+   - For liquidity questions (e.g. "can Chase cover this bill?"), compare the available checking balance against upcoming due amounts and calculate the exact surplus or shortfall.
 """
 
 IMAGE_ANALYSIS_PROMPT = """\

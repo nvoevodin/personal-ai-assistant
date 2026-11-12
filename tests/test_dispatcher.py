@@ -231,3 +231,43 @@ async def test_dispatch_error_handling(mock_openai_client: MagicMock) -> None:
         await dispatcher.dispatch_query("Hello bot")
 
     assert "rate limit" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_investigate_and_advise_suppresses_on_no_action(mock_openai_client: MagicMock) -> None:
+    """Verify Tier 2 returns None when determining NO_ACTION_REQUIRED."""
+    mock_choice = MagicMock()
+    mock_choice.message.content = "NO_ACTION_REQUIRED"
+    mock_choice.message.tool_calls = None
+    mock_response = MagicMock(choices=[mock_choice], usage=MagicMock(prompt_tokens=400, completion_tokens=10))
+    mock_openai_client.chat.completions.create.return_value = mock_response
+
+    dispatcher = ModelDispatcher(client=mock_openai_client)
+    advisory = await dispatcher.investigate_and_advise(
+        event_payload="Frontier Airlines Mastercard: Your new statement is now ready",
+        context_block="Checking balance: $5,000",
+    )
+
+    assert advisory is None
+
+
+@pytest.mark.asyncio
+async def test_investigate_and_advise_returns_actionable_advisory(mock_openai_client: MagicMock) -> None:
+    """Verify Tier 2 returns formatted executive advisory when action is needed."""
+    advisory_text = (
+        "⚠️ **Cash Flow Warning**: Your Chase College checking balance is $364.92, "
+        "which will not cover your $404 auto-pay scheduled for tomorrow."
+    )
+    mock_choice = MagicMock()
+    mock_choice.message.content = advisory_text
+    mock_choice.message.tool_calls = None
+    mock_response = MagicMock(choices=[mock_choice], usage=MagicMock(prompt_tokens=500, completion_tokens=40))
+    mock_openai_client.chat.completions.create.return_value = mock_response
+
+    dispatcher = ModelDispatcher(client=mock_openai_client)
+    advisory = await dispatcher.investigate_and_advise(
+        event_payload="Upcoming auto-pay: $404.00",
+        context_block="CHASE COLLEGE: $364.92",
+    )
+
+    assert advisory == advisory_text

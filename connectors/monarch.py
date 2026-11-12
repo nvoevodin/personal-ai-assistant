@@ -276,26 +276,61 @@ class MonarchConnector(BaseConnector):
         events: list[StreamEvent] = []
 
         for tx in txs:
-            is_large = abs(tx.amount) > 500.0 and tx.amount > 0
-            summary = (
-                f"{tx.merchant}: ${abs(tx.amount):.2f} "
-                f"[{tx.category}] via {tx.account_name} ({tx.account_mask})"
-            )
+            amt = tx.amount
+            abs_amt = abs(amt)
+            is_credit_card = any(k in (tx.account_name or "").lower() for k in ["credit", "card", "mastercard", "visa", "amex"])
+
+            if is_credit_card:
+                if amt > 0:
+                    flow_type = "PAYMENT (CREDIT)"
+                    flow_text = f"+${abs_amt:,.2f} payment credited to {tx.account_name} from {tx.merchant}"
+                else:
+                    flow_type = "CHARGE (EXPENSE)"
+                    flow_text = f"-${abs_amt:,.2f} charged to {tx.account_name} at {tx.merchant} [{tx.category}]"
+            else:
+                # Bank/Checking accounts: positive is incoming deposit, negative is outgoing debit
+                if amt > 0:
+                    flow_type = "DEPOSIT (INFLOW)"
+                    flow_text = f"+${abs_amt:,.2f} deposited INTO {tx.account_name} FROM {tx.merchant} [{tx.category}]"
+                else:
+                    flow_type = "WITHDRAWAL (OUTFLOW)"
+                    flow_text = f"-${abs_amt:,.2f} paid/transferred OUT OF {tx.account_name} TO {tx.merchant} [{tx.category}]"
+
+            pending_str = " (Pending)" if tx.pending else ""
+            summary = f"[{flow_type}] {flow_text}{pending_str}"
+            is_large = abs_amt > 1000.0 or (amt > 500.0 and not is_credit_card)
+
             events.append(
                 StreamEvent(
                     id=f"monarch-{tx.transaction_id}",
                     stream_type=self.stream_type,
                     source=self.name,
                     timestamp=tx.timestamp,
-                    title=f"Transaction: {tx.merchant}",
+                    title=f"{flow_type}: {tx.merchant}",
                     summary=summary,
                     raw_data=tx.model_dump(mode="json"),
                     is_urgent=is_large,
-                    metadata={"pending": tx.pending, "category": tx.category},
+                    metadata={"pending": tx.pending, "category": tx.category, "amount": amt},
                 )
             )
 
         return events
+
+    async def request_sync(self, account_ids: list[str] | None = None) -> bool:
+        """Trigger an on-demand live bank sync via Monarch API to refresh balances from institutions."""
+        if not self._client:
+            return False
+        try:
+            if not account_ids:
+                accounts = await self.get_accounts()
+                account_ids = [a.account_id for a in accounts if a.account_id and a.account_id != "None"]
+            if account_ids:
+                res = await self._client.request_accounts_refresh(account_ids=account_ids)
+                logger.info("Monarch accounts sync requested for %d accounts: %s", len(account_ids), res)
+                return bool(res)
+        except Exception as exc:
+            logger.warning("Failed requesting Monarch account refresh: %s", exc)
+        return False
 
     async def get_recurring_obligations(self) -> list[dict[str, Any]]:
         """Fetch verified billing statements and active recurring streams.

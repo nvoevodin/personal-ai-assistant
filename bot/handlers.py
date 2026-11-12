@@ -325,6 +325,15 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
     registry = _get_connector_registry(context)
+
+    # Trigger live institution sync via Monarch API if connected
+    monarch = registry.get("monarch")
+    if monarch and hasattr(monarch, "request_sync"):
+        try:
+            await monarch.request_sync()
+        except Exception as sync_err:
+            logger.debug("Monarch live institution sync trigger: %s", sync_err)
+
     events = await registry.fetch_all_events(limit_per_connector=5)
 
     if not events:
